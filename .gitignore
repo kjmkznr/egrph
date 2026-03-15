@@ -1,0 +1,21 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDEs
+.idea/
+.vscode/
+
+# Environment variables
+.env
+
+# Build artifacts
+*.a
+*.so
+*.dylib
+*.dll
+*.lib
+
+# Session artifacts
+.junie/
+.output.txt
