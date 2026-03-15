@@ -1,0 +1,20 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+query = { SOI ~ (create_clause | match_clause) ~ EOI }
+
+create_clause = { ^"CREATE" ~ node_pattern }
+match_clause = { ^"MATCH" ~ node_pattern ~ ^"RETURN" ~ variable }
+
+node_pattern = { "(" ~ variable? ~ labels? ~ properties? ~ ")" }
+variable = { IDENTIFIER }
+labels = { (":" ~ IDENTIFIER)+ }
+properties = { "{" ~ property_list? ~ "}" }
+property_list = { property ~ ("," ~ property)* }
+property = { IDENTIFIER ~ ":" ~ value }
+
+value = { string | integer | boolean }
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+integer = @{ "-"? ~ ASCII_DIGIT+ }
+boolean = { ^"true" | ^"false" }
+
+IDENTIFIER = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

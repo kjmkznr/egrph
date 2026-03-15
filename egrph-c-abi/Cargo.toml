@@ -1,0 +1,10 @@
+[package]
+name = "egrph-c-abi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+egrph-core = { path = "../egrph-core" }

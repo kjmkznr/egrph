@@ -1,0 +1,13 @@
+[package]
+name = "egrph-python"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "egrph"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+egrph-core = { path = "../egrph-core" }
+serde_json = "1.0"

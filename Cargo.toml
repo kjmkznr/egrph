@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "egrph-core",
+    "egrph-python",
+    "egrph-c-abi",
+]
