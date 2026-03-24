@@ -8,7 +8,7 @@ use crate::error::CypherError;
 use crate::graph::storage::GraphStorage;
 use crate::graph::types::*;
 use crate::planner::plan::LogicalPlan;
-use self::expression::{Record, eval, is_truthy, compare_values, cypher_value_to_stable_key};
+use self::expression::{Record, Parameters, eval, is_truthy, compare_values, cypher_value_to_stable_key};
 use self::result::{QueryResult, ResultRow};
 use self::aggregation::{items_contain_aggregation, execute_aggregation};
 
@@ -16,7 +16,8 @@ pub fn execute(
     plan: &LogicalPlan,
     storage: &mut GraphStorage,
 ) -> Result<QueryResult, CypherError> {
-    let (cols, records) = execute_to_records(plan, storage)?;
+    let params: Parameters = HashMap::new();
+    let (cols, records) = execute_to_records(plan, storage, &params)?;
     Ok(records_to_query_result(cols, records))
 }
 
@@ -24,6 +25,7 @@ pub fn execute(
 fn execute_to_records(
     plan: &LogicalPlan,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     match plan {
         LogicalPlan::EmptyRow => {
@@ -31,11 +33,11 @@ fn execute_to_records(
         }
 
         LogicalPlan::CreateNode { input, pattern } => {
-            execute_create_node(input, pattern, storage)
+            execute_create_node(input, pattern, storage, params)
         }
 
         LogicalPlan::CreatePath { input, start, elements } => {
-            execute_create_path(input, start, elements, storage)
+            execute_create_path(input, start, elements, storage, params)
         }
 
         LogicalPlan::ScanNodes { label_filter, variable } => {
@@ -54,7 +56,7 @@ fn execute_to_records(
         LogicalPlan::Expand {
             input, src_variable, rel_variable, dst_variable, rel_types, direction,
         } => {
-            let (mut cols, input_records) = execute_to_records(input, storage)?;
+            let (mut cols, input_records) = execute_to_records(input, storage, params)?;
 
             if let Some(rv) = rel_variable {
                 if !cols.contains(rv) {
@@ -113,7 +115,7 @@ fn execute_to_records(
         }
 
         LogicalPlan::Filter { input, predicate } => {
-            let (cols, records) = execute_to_records(input, storage)?;
+            let (cols, records) = execute_to_records(input, storage, params)?;
             let filtered: Vec<Record> = records
                 .into_iter()
                 .filter(|rec| is_truthy(&eval(predicate, rec)))
@@ -122,7 +124,7 @@ fn execute_to_records(
         }
 
         LogicalPlan::Return { input, items, distinct } => {
-            let (_input_cols, input_records) = execute_to_records(input, storage)?;
+            let (_input_cols, input_records) = execute_to_records(input, storage, params)?;
 
             let columns: Vec<String> = items
                 .iter()
@@ -132,7 +134,7 @@ fn execute_to_records(
                 .collect();
 
             let mut rows: Vec<Record> = if items_contain_aggregation(items) {
-                execute_aggregation(items, &input_records, &columns)
+                execute_aggregation(items, &input_records, &columns, params)
             } else {
                 input_records
                     .iter()
@@ -161,7 +163,7 @@ fn execute_to_records(
         }
 
         LogicalPlan::Sort { input, items } => {
-            let (cols, mut records) = execute_to_records(input, storage)?;
+            let (cols, mut records) = execute_to_records(input, storage, params)?;
             records.sort_by(|a, b| {
                 for item in items {
                     let va = eval(&item.expression, a);
@@ -178,7 +180,7 @@ fn execute_to_records(
         }
 
         LogicalPlan::Skip { input, count } => {
-            let (cols, records) = execute_to_records(input, storage)?;
+            let (cols, records) = execute_to_records(input, storage, params)?;
             // SKIP/LIMIT count expressions must be parameter-only or literals;
             // evaluate them against an empty record as per openCypher spec.
             let n = match eval(count, &Record::new()) {
@@ -190,7 +192,7 @@ fn execute_to_records(
         }
 
         LogicalPlan::Limit { input, count } => {
-            let (cols, records) = execute_to_records(input, storage)?;
+            let (cols, records) = execute_to_records(input, storage, params)?;
             let n = match eval(count, &Record::new()) {
                 CypherValue::Integer(i) => i.max(0) as usize,
                 _ => records.len(),
@@ -200,32 +202,32 @@ fn execute_to_records(
         }
 
         LogicalPlan::With { input, items, distinct, where_predicate } => {
-            execute_with(input, items, *distinct, where_predicate.as_ref(), storage)
+            execute_with(input, items, *distinct, where_predicate.as_ref(), storage, params)
         }
 
         LogicalPlan::Unwind { input, expression, alias } => {
-            execute_unwind(input, expression, alias, storage)
+            execute_unwind(input, expression, alias, storage, params)
         }
 
         LogicalPlan::SetOp { input, items } => {
-            execute_set(input, items, storage)
+            execute_set(input, items, storage, params)
         }
 
         LogicalPlan::RemoveOp { input, items } => {
-            execute_remove(input, items, storage)
+            execute_remove(input, items, storage, params)
         }
 
         LogicalPlan::DeleteOp { input, expressions, detach } => {
-            execute_delete(input, expressions, *detach, storage)
+            execute_delete(input, expressions, *detach, storage, params)
         }
 
         LogicalPlan::MergeOp { input, pattern, on_create, on_match } => {
-            execute_merge(input, pattern, on_create.as_deref(), on_match.as_deref(), storage)
+            execute_merge(input, pattern, on_create.as_deref(), on_match.as_deref(), storage, params)
         }
 
         LogicalPlan::CartesianProduct { left, right } => {
-            let (left_cols, left_records) = execute_to_records(left, storage)?;
-            let (right_cols, right_records) = execute_to_records(right, storage)?;
+            let (left_cols, left_records) = execute_to_records(left, storage, params)?;
+            let (right_cols, right_records) = execute_to_records(right, storage, params)?;
 
             // Merge column lists, preserving order and deduplicating
             let mut cols = left_cols.clone();
@@ -258,8 +260,9 @@ fn execute_create_node(
     input: &LogicalPlan,
     pattern: &NodePattern,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (mut cols, input_records) = execute_to_records(input, storage)?;
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
 
     // Bind the created node variable if provided
     let var = pattern.variable.clone();
@@ -291,8 +294,9 @@ fn execute_create_path(
     start: &NodePattern,
     elements: &[PatternChainElement],
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (mut cols, input_records) = execute_to_records(input, storage)?;
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
 
     // Collect all variable names we will bind
     let start_var = start.variable.clone();
@@ -308,7 +312,6 @@ fn execute_create_path(
         }
     }
 
-    let from_empty_input = matches!(input, LogicalPlan::EmptyRow);
     let base_records = if input_records.is_empty() { vec![Record::new()] } else { input_records };
     let mut result = Vec::with_capacity(base_records.len());
 
@@ -350,17 +353,9 @@ fn execute_create_path(
             prev_id = dst_id;
         }
 
-        // When started from an empty input (no prior pipeline), emit one row per
-        // node in the path so that callers without a RETURN clause can observe
-        // the created elements.
-        if from_empty_input {
-            let node_count = 1 + elements.len(); // start node + one per chain element
-            for _ in 0..node_count {
-                result.push(rec.clone());
-            }
-        } else {
-            result.push(rec);
-        }
+        // Always emit exactly one row per input row: all created nodes/relationships
+        // are bound in `rec` and available for subsequent pipeline stages.
+        result.push(rec);
     }
 
     Ok((cols, result))
@@ -372,8 +367,9 @@ fn execute_with(
     distinct: bool,
     where_predicate: Option<&Expression>,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (_input_cols, input_records) = execute_to_records(input, storage)?;
+    let (_input_cols, input_records) = execute_to_records(input, storage, params)?;
 
     let columns: Vec<String> = items
         .iter()
@@ -383,7 +379,7 @@ fn execute_with(
         .collect();
 
     let mut rows: Vec<Record> = if items_contain_aggregation(items) {
-        execute_aggregation(items, &input_records, &columns)
+        execute_aggregation(items, &input_records, &columns, params)
     } else {
         input_records
             .iter()
@@ -421,8 +417,9 @@ fn execute_unwind(
     expression: &Expression,
     alias: &str,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (mut cols, input_records) = execute_to_records(input, storage)?;
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
 
     if !cols.contains(&alias.to_string()) {
         cols.push(alias.to_string());
@@ -459,8 +456,9 @@ fn execute_set(
     input: &LogicalPlan,
     items: &[SetItem],
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (cols, mut records) = execute_to_records(input, storage)?;
+    let (cols, mut records) = execute_to_records(input, storage, params)?;
 
     for rec in &mut records {
         for item in items {
@@ -576,8 +574,9 @@ fn execute_remove(
     input: &LogicalPlan,
     items: &[RemoveItem],
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (cols, mut records) = execute_to_records(input, storage)?;
+    let (cols, mut records) = execute_to_records(input, storage, params)?;
 
     for rec in &mut records {
         for item in items {
@@ -619,8 +618,9 @@ fn execute_delete(
     expressions: &[Expression],
     detach: bool,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (cols, records) = execute_to_records(input, storage)?;
+    let (cols, records) = execute_to_records(input, storage, params)?;
 
     // Collect all entities to delete first, using sets for O(1) deduplication.
     let mut node_ids: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
@@ -648,8 +648,21 @@ fn execute_delete(
             .map_err(CypherError::RuntimeError)?;
     }
 
-    // Return empty records — deleted rows are no longer part of the pipeline.
-    Ok((cols, Vec::new()))
+    // Keep rows but remove deleted entity bindings from each record so that
+    // subsequent pipeline stages (e.g. RETURN a, b after DELETE r) still work.
+    let output_records: Vec<Record> = records
+        .into_iter()
+        .map(|mut rec| {
+            rec.retain(|_k, v| match v {
+                CypherValue::Node(n) => !node_ids.contains(&n.id),
+                CypherValue::Relationship(e) => !edge_ids.contains(&e.id),
+                _ => true,
+            });
+            rec
+        })
+        .collect();
+
+    Ok((cols, output_records))
 }
 
 fn execute_merge(
@@ -658,8 +671,9 @@ fn execute_merge(
     on_create: Option<&[SetItem]>,
     on_match: Option<&[SetItem]>,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (mut cols, input_records) = execute_to_records(input, storage)?;
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
 
     match pattern {
         PatternElement::Node(np) => {
@@ -714,77 +728,13 @@ fn execute_merge(
 
             Ok((cols, result_records))
         }
-        PatternElement::Chain { start, elements } => {
-            // For chain patterns in MERGE, simplified: just create the whole path if not found
-            // Full MERGE semantics for paths is complex; here we check start node only
-            let variable = start.variable.clone().unwrap_or_else(|| "_merge_start".to_string());
-            if !cols.contains(&variable) {
-                cols.push(variable.clone());
-            }
-
-            let labels = start.labels.clone();
-            let properties = resolve_map_literal_to_properties(&start.properties)?;
-            let existing = storage.find_node(&labels, &properties);
-
-            let mut result_records = if input_records.is_empty() {
-                vec![Record::new()]
-            } else {
-                input_records
-            };
-
-            match existing {
-                Some(node_id) => {
-                    let node = storage.get_node(node_id).unwrap().clone();
-                    for rec in &mut result_records {
-                        rec.insert(variable.clone(), CypherValue::Node(node.clone()));
-                    }
-                    if let Some(items) = on_match {
-                        for rec in &mut result_records {
-                            for item in items {
-                                apply_set_item(item, rec, storage)?;
-                            }
-                        }
-                    }
-                }
-                None => {
-                    // Create the full path
-                    let start_id = storage.create_node(labels, properties);
-                    let start_node = storage.get_node(start_id).unwrap().clone();
-
-                    let mut prev_id = start_id;
-                    for elem in elements {
-                        let dst_labels = elem.node.labels.clone();
-                        let dst_props = resolve_map_literal_to_properties(&elem.node.properties)?;
-                        let dst_id = storage.create_node(dst_labels, dst_props);
-
-                        let edge_label = elem.relationship.rel_types.first().cloned().unwrap_or_default();
-                        let edge_props = resolve_map_literal_to_properties(&elem.relationship.properties)?;
-
-                        let (src, dst) = match elem.relationship.direction {
-                            Direction::Incoming => (dst_id, prev_id),
-                            _ => (prev_id, dst_id),
-                        };
-
-                        storage.create_edge(edge_label, src, dst, edge_props)
-                            .map_err(CypherError::RuntimeError)?;
-
-                        prev_id = dst_id;
-                    }
-
-                    for rec in &mut result_records {
-                        rec.insert(variable.clone(), CypherValue::Node(start_node.clone()));
-                    }
-                    if let Some(items) = on_create {
-                        for rec in &mut result_records {
-                            for item in items {
-                                apply_set_item(item, rec, storage)?;
-                            }
-                        }
-                    }
-                }
-            }
-
-            Ok((cols, result_records))
+        PatternElement::Chain { .. } => {
+            // MERGE on path patterns requires matching/creating the entire path atomically,
+            // which is not yet implemented. Return a clear error rather than silently
+            // producing wrong results.
+            Err(CypherError::NotImplemented(
+                "MERGE with relationship chain patterns is not yet supported; use MERGE on nodes only".to_string(),
+            ))
         }
     }
 }

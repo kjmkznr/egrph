@@ -140,7 +140,8 @@ postfix_op = { property_lookup | subscript }
 property_lookup = { "." ~ IDENTIFIER }
 subscript = { "[" ~ subscript_content ~ "]" }
 subscript_content = { slice_range | expression }
-slice_range = { expression? ~ ".." ~ expression? }
+dotdot     = { ".." }
+slice_range = { expression? ~ dotdot ~ expression? }
 null_predicate = { is_kw ~ not_kw? ~ null_kw }
 
 // Word-boundary keyword rules for expression operators (to prevent partial matches)

@@ -69,8 +69,8 @@ pub fn execute_aggregation(
     items: &[ReturnItem],
     input_records: &[Record],
     columns: &[String],
+    params: &Parameters,
 ) -> Vec<Record> {
-    let params: Parameters = HashMap::new();
 
     // Separate grouping keys from aggregate items
     let group_indices: Vec<usize> = items
@@ -116,13 +116,11 @@ pub fn execute_aggregation(
         groups[idx].1.push(rec);
     }
 
-    // If no input records, still produce one row with empty aggregations (for COUNT etc.)
-    if input_records.is_empty() {
-        let key_values: Vec<CypherValue> = group_indices
-            .iter()
-            .map(|&i| eval_with_params(&items[i].expression, &Record::new(), &params))
-            .collect();
-        groups.push((key_values, Vec::new()));
+    // If no input records and there are no grouping keys, produce one empty row so that
+    // pure aggregations like COUNT(*) return 0 rather than no rows at all.
+    // When grouping keys ARE present, empty input → empty output (no groups).
+    if input_records.is_empty() && group_indices.is_empty() {
+        groups.push((Vec::new(), Vec::new()));
     }
 
     // For each group, compute aggregated values and build output rows
@@ -287,8 +285,16 @@ fn sum_values(vals: &[CypherValue]) -> CypherValue {
     }
     let all_int = vals.iter().all(|v| matches!(v, CypherValue::Integer(_)));
     if all_int {
-        let s: i64 = vals.iter().map(|v| if let CypherValue::Integer(i) = v { *i } else { 0 }).sum();
-        CypherValue::Integer(s)
+        let mut acc: i64 = 0;
+        for v in vals {
+            if let CypherValue::Integer(i) = v {
+                match acc.checked_add(*i) {
+                    Some(next) => acc = next,
+                    None => return CypherValue::Null, // overflow
+                }
+            }
+        }
+        CypherValue::Integer(acc)
     } else {
         let s: f64 = vals.iter().filter_map(|v| to_f64(v)).sum();
         CypherValue::Float(s)
@@ -332,6 +338,10 @@ fn stdev_values(vals: &[CypherValue], sample: bool) -> CypherValue {
 }
 
 fn percentile_cont(vals: &[CypherValue], p: f64) -> CypherValue {
+    // percentile must be in [0.0, 1.0]
+    if !(0.0..=1.0).contains(&p) {
+        return CypherValue::Null;
+    }
     if vals.is_empty() {
         return CypherValue::Null;
     }
@@ -352,6 +362,10 @@ fn percentile_cont(vals: &[CypherValue], p: f64) -> CypherValue {
 }
 
 fn percentile_disc(vals: &[CypherValue], p: f64) -> CypherValue {
+    // percentile must be in [0.0, 1.0]
+    if !(0.0..=1.0).contains(&p) {
+        return CypherValue::Null;
+    }
     if vals.is_empty() {
         return CypherValue::Null;
     }

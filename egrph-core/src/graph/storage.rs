@@ -219,6 +219,11 @@ impl GraphStorage {
             self.incoming.remove(&id);
         }
 
+        // Remove adjacency list entries for this node regardless of detach mode.
+        // (If detach=false we already confirmed there are no live edges above.)
+        self.outgoing.remove(&id);
+        self.incoming.remove(&id);
+
         // Remove node from label index
         if let Some(node) = self.nodes.get(&id) {
             for label in &node.labels.clone() {
@@ -246,6 +251,11 @@ impl GraphStorage {
         }
     }
 
+    /// Find a node that matches all given labels and properties.
+    ///
+    /// When `labels` is non-empty the label index is used to narrow the candidate
+    /// set to O(|matching nodes|). When `labels` is empty **all** nodes are
+    /// scanned in O(|nodes|) — avoid calling with an empty label list on large graphs.
     pub fn find_node(&self, labels: &[String], properties: &HashMap<String, PropertyValue>) -> Option<NodeId> {
         // Use the label index to narrow candidates when labels are present
         let candidates: Box<dyn Iterator<Item = &NodeId>> = if let Some(first_label) = labels.first() {

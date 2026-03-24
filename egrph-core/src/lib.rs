@@ -91,10 +91,11 @@ mod tests {
         let result = g.execute(
             "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
         ).unwrap();
-        // Should create 2 nodes
+        // Should create 2 nodes and 1 edge. CREATE without RETURN produces
+        // exactly 1 row per path (carrying bound variables, no projected columns).
         assert_eq!(g.node_count(), 2);
         assert_eq!(g.edge_count(), 1);
-        assert!(result.rows.len() >= 2);
+        assert_eq!(result.rows.len(), 1);
     }
 
     #[test]

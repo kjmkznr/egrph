@@ -1095,34 +1095,40 @@ fn parse_postfix_expression(
 }
 
 fn parse_slice_range(pair: pest::iterators::Pair<Rule>) -> Result<(Option<Box<Expression>>, Option<Box<Expression>>), CypherError> {
-    // Determine `..` position using the byte offset of the first expression child
-    // relative to the start of the slice_range span.  This is more robust than
-    // scanning the raw text for ".." which can false-match inside string literals
-    // or float literals (e.g. "a..b" or 1.0..2.0).
-    let range_start = pair.as_span().start();
+    // The grammar is: slice_range = { expression? ~ dotdot ~ expression? }
+    // We distinguish which expression appears before vs. after ".." by checking
+    // byte offsets against the `dotdot` token, which the grammar now exposes as
+    // a named rule.  This is correct even with leading/trailing whitespace inside
+    // the brackets because pest spans are byte-accurate.
 
-    // Collect expression children before consuming the pair
-    let mut expr_pairs: Vec<pest::iterators::Pair<Rule>> = pair
-        .into_inner()
-        .filter(|p| p.as_rule() == Rule::expression)
-        .collect();
+    let mut dotdot_start: Option<usize> = None;
+    let mut expr_pairs: Vec<pest::iterators::Pair<Rule>> = Vec::new();
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::dotdot => {
+                dotdot_start = Some(inner.as_span().start());
+            }
+            Rule::expression => {
+                expr_pairs.push(inner);
+            }
+            _ => {}
+        }
+    }
+
+    let dotdot_pos = dotdot_start.unwrap_or(usize::MAX);
 
     match expr_pairs.len() {
         0 => Ok((None, None)),
         1 => {
             let expr_pair = expr_pairs.remove(0);
-            // If the expression child starts immediately at the beginning of the
-            // slice_range span (no intervening ".." token), it precedes "..".
             let expr_offset = expr_pair.as_span().start();
             let expr = parse_expression(expr_pair)?;
-            // Any leading characters before the expression are either whitespace or "..".
-            // A non-empty (non-whitespace) prefix means ".." came first.
-            let chars_before = expr_offset - range_start;
-            if chars_before == 0 {
-                // expression comes first: "expr.."
+            if expr_offset < dotdot_pos {
+                // expression comes before "..": "expr.."
                 Ok((Some(Box::new(expr)), None))
             } else {
-                // ".." comes first: "..expr"
+                // expression comes after "..": "..expr"
                 Ok((None, Some(Box::new(expr))))
             }
         }

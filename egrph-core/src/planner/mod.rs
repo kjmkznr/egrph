@@ -65,23 +65,25 @@ fn plan_create(create: &CreateClause, input: LogicalPlan) -> Result<LogicalPlan,
 }
 
 fn plan_match(match_clause: &MatchClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
-    if let Some(part) = match_clause.pattern.parts.first() {
-        let scan_plan = plan_match_scan(part)?;
+    if match_clause.pattern.parts.is_empty() {
+        return Err(CypherError::SemanticError("Empty MATCH pattern".to_string()));
+    }
 
-        // If the input is a non-trivial plan (not EmptyRow), cross it with the scan
-        // so that earlier bindings are preserved alongside the new MATCH bindings.
-        let current = match input {
+    // Each comma-separated pattern part becomes a scan that is cross-joined with
+    // the accumulated plan so that all bindings remain visible.
+    let mut current = input;
+    for part in &match_clause.pattern.parts {
+        let scan_plan = plan_match_scan(part)?;
+        current = match current {
             LogicalPlan::EmptyRow => scan_plan,
             other => LogicalPlan::CartesianProduct {
                 left: Box::new(other),
                 right: Box::new(scan_plan),
             },
         };
-
-        Ok(current)
-    } else {
-        Err(CypherError::SemanticError("Empty MATCH pattern".to_string()))
     }
+
+    Ok(current)
 }
 
 /// Build the scan/expand plan for a single pattern part, without threading prior input.
@@ -215,15 +217,32 @@ fn plan_return(
     return_clause: &ReturnClause,
     input: LogicalPlan,
 ) -> Result<LogicalPlan, CypherError> {
-    // Sort BEFORE projection so sort expressions have access to all pre-projected
-    // variables (e.g. ORDER BY n.age when only n.name is returned).
     let mut current = input;
 
-    if let Some(ref order_items) = return_clause.order_by {
-        current = LogicalPlan::Sort {
-            input: Box::new(current),
-            items: order_items.clone(),
-        };
+    // Collect the set of aliases introduced by this RETURN clause.
+    let aliases: std::collections::HashSet<String> = return_clause
+        .items
+        .iter()
+        .filter_map(|item| item.alias.clone())
+        .collect();
+
+    // Determine whether any ORDER BY item references a projected alias.
+    // If so, sorting must happen AFTER projection. Otherwise sort before so
+    // that ORDER BY can reference non-projected columns (e.g. ORDER BY n.age).
+    let sort_after = if let Some(ref order_items) = return_clause.order_by {
+        order_items.iter().any(|item| order_item_uses_alias(&item.expression, &aliases))
+    } else {
+        false
+    };
+
+    if !sort_after {
+        // Sort BEFORE projection — ORDER BY references pre-projection columns.
+        if let Some(ref order_items) = return_clause.order_by {
+            current = LogicalPlan::Sort {
+                input: Box::new(current),
+                items: order_items.clone(),
+            };
+        }
     }
 
     // Project (RETURN items)
@@ -233,7 +252,17 @@ fn plan_return(
         distinct: return_clause.distinct,
     };
 
-    // Skip and Limit after projection
+    if sort_after {
+        // Sort AFTER projection — ORDER BY references projected aliases.
+        if let Some(ref order_items) = return_clause.order_by {
+            current = LogicalPlan::Sort {
+                input: Box::new(current),
+                items: order_items.clone(),
+            };
+        }
+    }
+
+    // Skip and Limit after sort/projection
     if let Some(ref skip_expr) = return_clause.skip {
         current = LogicalPlan::Skip {
             input: Box::new(current),
@@ -249,6 +278,15 @@ fn plan_return(
     }
 
     Ok(current)
+}
+
+/// Returns true if the sort expression is a simple variable reference that matches
+/// one of the projected aliases (meaning it only exists after projection).
+fn order_item_uses_alias(expr: &Expression, aliases: &std::collections::HashSet<String>) -> bool {
+    match expr {
+        Expression::Variable(name) => aliases.contains(name),
+        _ => false,
+    }
 }
 
 fn plan_with(

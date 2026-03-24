@@ -363,6 +363,12 @@ fn eval_regex_match(value: &CypherValue, pattern: &CypherValue) -> CypherValue {
             let full_pattern = format!("^(?:{})$", p);
             let is_match = REGEX_CACHE.with(|cache| {
                 let mut map = cache.borrow_mut();
+                // Evict oldest entry when cache reaches limit to bound memory usage.
+                if map.len() >= 256 && !map.contains_key(&full_pattern) {
+                    if let Some(key) = map.keys().next().cloned() {
+                        map.remove(&key);
+                    }
+                }
                 let entry = map.entry(full_pattern.clone()).or_insert_with(|| Regex::new(&full_pattern).ok());
                 entry.as_ref().map(|re| re.is_match(s))
             });
@@ -651,7 +657,14 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                 match &val {
                     CypherValue::Null => CypherValue::Null,
                     CypherValue::Integer(_) => val,
-                    CypherValue::Float(f) => CypherValue::Integer(*f as i64),
+                    CypherValue::Float(f) => {
+                        // Cast is UB if f is out of i64 range; guard with range check.
+                        if f.is_nan() || f.is_infinite() || *f < i64::MIN as f64 || *f > i64::MAX as f64 {
+                            CypherValue::Null
+                        } else {
+                            CypherValue::Integer(*f as i64)
+                        }
+                    }
                     CypherValue::String(s) => {
                         s.parse::<i64>().map(CypherValue::Integer).unwrap_or(CypherValue::Null)
                     }
@@ -1194,7 +1207,9 @@ pub fn cypher_value_to_stable_key(val: &CypherValue) -> String {
         CypherValue::Boolean(b) => format!("B:{}", b),
         CypherValue::Integer(i) => format!("I:{}", i),
         CypherValue::Float(f) => format!("F:{}", f.to_bits()),
-        CypherValue::String(s) => format!("S:{}", s),
+        // Escape backslashes first, then null bytes, so the null-byte separator
+        // used by the grouping-key joiner cannot appear inside a string value.
+        CypherValue::String(s) => format!("S:{}", s.replace('\\', "\\\\").replace('\x00', "\\0")),
         CypherValue::List(items) => {
             let inner: Vec<String> = items.iter().map(cypher_value_to_stable_key).collect();
             format!("L:[{}]", inner.join(","))
