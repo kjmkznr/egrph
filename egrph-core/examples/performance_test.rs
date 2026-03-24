@@ -31,20 +31,20 @@ fn main() {
         // 3. MATCH クエリ (Cypher)
         // 全てのPersonノードを検索
         let start = Instant::now();
-        let results = g.query("MATCH (:Person) RETURN p").unwrap();
+        let results = g.execute("MATCH (p:Person) RETURN p").unwrap();
         let duration = start.elapsed();
-        println!("MATCH (:Person) (found {}): {:?}", results.len(), duration);
+        println!("MATCH (:Person) (found {}): {:?}", results.rows.len(), duration);
 
         // 4. 特定のラベルがないノードの検索 (最悪ケース)
         let start = Instant::now();
-        let results = g.query("MATCH (:NonExistent) RETURN n").unwrap();
+        let results = g.execute("MATCH (n:NonExistent) RETURN n").unwrap();
         let duration = start.elapsed();
-        println!("MATCH (:NonExistent) (found {}): {:?}", results.len(), duration);
-        
+        println!("MATCH (:NonExistent) (found {}): {:?}", results.rows.len(), duration);
+
         // 5. CREATE クエリ (Cypher)
         let start = Instant::now();
-        for i in 0..1000 {
-            g.query("CREATE (:Person {name: \"Test\", age: 20})").unwrap();
+        for _i in 0..1000 {
+            g.execute("CREATE (:Person {name: \"Test\", age: 20})").unwrap();
         }
         let duration = start.elapsed();
         println!("CREATE 1000 nodes (Cypher): {:?}", duration);

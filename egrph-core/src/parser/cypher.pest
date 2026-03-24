@@ -1,0 +1,223 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+// Top-level query: sequence of clauses
+query = { SOI ~ clause+ ~ EOI }
+
+clause = {
+    create_clause
+  | match_clause
+  | return_clause
+  | with_clause
+  | unwind_clause
+  | merge_clause
+  | set_clause
+  | remove_clause
+  | delete_clause
+  | where_clause
+}
+
+// --- MATCH ---
+match_clause = { optional_match | regular_match }
+optional_match = { ^"OPTIONAL" ~ ^"MATCH" ~ pattern_list }
+regular_match = { ^"MATCH" ~ pattern_list }
+
+// --- CREATE ---
+create_clause = { ^"CREATE" ~ pattern_list }
+
+// --- RETURN ---
+return_clause = {
+    ^"RETURN" ~ distinct_kw? ~ return_items ~ order_by_clause? ~ skip_clause? ~ limit_clause?
+}
+distinct_kw = { ^"DISTINCT" }
+return_items = { star_item | return_item_list }
+star_item = { "*" }
+return_item_list = { return_item ~ ("," ~ return_item)* }
+return_item = { expression ~ (^"AS" ~ variable)? }
+
+// --- WHERE ---
+where_clause = { ^"WHERE" ~ expression }
+
+// --- WITH ---
+with_clause = {
+    ^"WITH" ~ distinct_kw? ~ return_items ~ order_by_clause? ~ skip_clause? ~ limit_clause? ~ where_clause?
+}
+
+// --- UNWIND ---
+unwind_clause = { ^"UNWIND" ~ expression ~ ^"AS" ~ variable }
+
+// --- SET ---
+set_clause = { ^"SET" ~ set_item ~ ("," ~ set_item)* }
+set_item = { set_property | set_merge_properties | set_all_properties | set_label }
+set_property = { variable ~ "." ~ IDENTIFIER ~ "=" ~ expression }
+set_all_properties = { variable ~ "=" ~ expression }
+set_merge_properties = { variable ~ "+=" ~ expression }
+set_label = { variable ~ labels }
+
+// --- REMOVE ---
+remove_clause = { ^"REMOVE" ~ remove_item ~ ("," ~ remove_item)* }
+remove_item = { remove_property | remove_label }
+remove_property = { variable ~ "." ~ IDENTIFIER }
+remove_label = { variable ~ labels }
+
+// --- DELETE ---
+delete_clause = { detach_kw? ~ ^"DELETE" ~ expression ~ ("," ~ expression)* }
+detach_kw = @{ ^"DETACH" ~ !ASCII_ALPHANUMERIC }
+
+// --- MERGE ---
+merge_clause = { ^"MERGE" ~ pattern_element ~ merge_action* }
+merge_action = { on_create_action | on_match_action }
+on_create_action = { ^"ON" ~ ^"CREATE" ~ ^"SET" ~ set_item ~ ("," ~ set_item)* }
+on_match_action = { ^"ON" ~ ^"MATCH" ~ ^"SET" ~ set_item ~ ("," ~ set_item)* }
+
+// --- ORDER BY ---
+order_by_clause = { ^"ORDER" ~ ^"BY" ~ sort_item ~ ("," ~ sort_item)* }
+sort_item = { expression ~ sort_direction? }
+sort_direction = { ^"DESCENDING" | ^"ASCENDING" | ^"DESC" | ^"ASC" }
+
+// --- SKIP / LIMIT ---
+skip_clause = { ^"SKIP" ~ expression }
+limit_clause = { ^"LIMIT" ~ expression }
+
+// --- Patterns ---
+pattern_list = { pattern ~ ("," ~ pattern)* }
+pattern = { (variable ~ "=")? ~ pattern_element }
+pattern_element = { node_pattern ~ (relationship_pattern ~ node_pattern)* }
+
+// Node pattern: (var:Label {prop: val})
+node_pattern = { "(" ~ variable? ~ labels? ~ properties? ~ ")" }
+labels = { (":" ~ IDENTIFIER)+ }
+properties = { "{" ~ property_list? ~ "}" }
+property_list = { property_pair ~ ("," ~ property_pair)* }
+property_pair = { property_key ~ ":" ~ expression }
+property_key = { IDENTIFIER }
+
+// Relationship pattern: -[r:TYPE]->
+relationship_pattern = {
+    left_arrow? ~ dash ~ relationship_detail? ~ dash ~ right_arrow?
+}
+relationship_detail = { "[" ~ variable? ~ rel_types? ~ range_literal? ~ properties? ~ "]" }
+rel_types = { ":" ~ IDENTIFIER ~ ("|" ~ ":"? ~ IDENTIFIER)* }
+range_literal = { "*" ~ (integer? ~ ".." ~ integer?)? }
+left_arrow = { "<" }
+right_arrow = { ">" }
+dash = _{ "-" }
+
+// --- Expressions (precedence climbing) ---
+// Keywords inside expressions use word_boundary to prevent partial matching
+// (e.g., "OR" must not match the prefix of "ORDER")
+expression = { or_expression }
+or_expression = { xor_expression ~ (or_kw ~ xor_expression)* }
+xor_expression = { and_expression ~ (xor_kw ~ and_expression)* }
+and_expression = { not_expression ~ (and_kw ~ not_expression)* }
+not_expression = { not_kw* ~ comparison_expression }
+
+// Comparison now includes string predicates (STARTS WITH, ENDS WITH, CONTAINS),
+// IN operator, and regex match (=~)
+comparison_expression = { string_predicate_expression ~ (comparison_op ~ string_predicate_expression)* }
+comparison_op = { "=~" | "<>" | "<=" | ">=" | "<" | ">" | "=" }
+
+// String predicates: expr STARTS WITH expr, expr ENDS WITH expr, expr CONTAINS expr
+// Also: expr IN expr
+string_predicate_expression = { add_expression ~ string_predicate_suffix? }
+string_predicate_suffix = {
+    starts_with_kw ~ add_expression
+  | ends_with_kw ~ add_expression
+  | contains_kw ~ add_expression
+  | in_kw ~ add_expression
+}
+
+add_expression = { mult_expression ~ (add_op ~ mult_expression)* }
+add_op = { "+" | "-" }
+mult_expression = { power_expression ~ (mult_op ~ power_expression)* }
+mult_op = { "*" | "/" | "%" }
+power_expression = { unary_expression ~ ("^" ~ unary_expression)* }
+unary_expression = { unary_op? ~ postfix_expression }
+unary_op = { "-" | "+" }
+
+// Postfix: property access, subscript (dynamic property / list index / list slice), null predicate
+postfix_expression = { atom ~ postfix_op* ~ null_predicate? }
+postfix_op = { property_lookup | subscript }
+property_lookup = { "." ~ IDENTIFIER }
+subscript = { "[" ~ subscript_content ~ "]" }
+subscript_content = { slice_range | expression }
+slice_range = { expression? ~ ".." ~ expression? }
+null_predicate = { is_kw ~ not_kw? ~ null_kw }
+
+// Word-boundary keyword rules for expression operators (to prevent partial matches)
+or_kw  = @{ ^"OR" ~ !ASCII_ALPHANUMERIC }
+xor_kw = @{ ^"XOR" ~ !ASCII_ALPHANUMERIC }
+and_kw = @{ ^"AND" ~ !ASCII_ALPHANUMERIC }
+not_kw = @{ ^"NOT" ~ !ASCII_ALPHANUMERIC }
+is_kw  = @{ ^"IS" ~ !ASCII_ALPHANUMERIC }
+null_kw = @{ ^"NULL" ~ !ASCII_ALPHANUMERIC }
+in_kw  = @{ ^"IN" ~ !ASCII_ALPHANUMERIC }
+starts_with_kw = @{ ^"STARTS" ~ WHITESPACE+ ~ ^"WITH" ~ !ASCII_ALPHANUMERIC }
+ends_with_kw   = @{ ^"ENDS" ~ WHITESPACE+ ~ ^"WITH" ~ !ASCII_ALPHANUMERIC }
+contains_kw    = @{ ^"CONTAINS" ~ !ASCII_ALPHANUMERIC }
+
+// --- Atoms ---
+atom = {
+    case_expression
+  | list_comprehension
+  | literal
+  | parameter
+  | function_invocation
+  | parenthesized_expression
+  | variable
+}
+
+parenthesized_expression = { "(" ~ expression ~ ")" }
+
+// --- CASE expression ---
+case_expression = {
+    ^"CASE" ~ expression? ~ case_alternative+ ~ (^"ELSE" ~ expression)? ~ ^"END"
+}
+case_alternative = { ^"WHEN" ~ expression ~ ^"THEN" ~ expression }
+
+// --- List comprehension ---
+// [variable IN expression WHERE expression | expression]
+list_comprehension = {
+    "[" ~ variable ~ in_kw ~ expression ~ (where_kw ~ expression)? ~ (pipe_op ~ expression)? ~ "]"
+}
+where_kw = { ^"WHERE" }
+pipe_op = { "|" }
+
+// --- Parameter ---
+parameter = { "$" ~ IDENTIFIER }
+
+function_invocation = {
+    function_name ~ "(" ~ distinct_kw? ~ (star_arg | expression_list)? ~ ")"
+}
+function_name = @{ IDENTIFIER }
+star_arg = { "*" }
+expression_list = { expression ~ ("," ~ expression)* }
+
+// --- Literals ---
+literal = { float | integer | string | boolean | null_literal | list_literal | map_literal }
+float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+integer = @{ "-"? ~ ("0x" ~ ASCII_HEX_DIGIT+ | "0o" ~ ('0'..'7')+ | ASCII_DIGIT+) }
+string = @{
+    "\"" ~ (escape_sequence | (!"\"" ~ !"\\" ~ ANY))* ~ "\""
+  | "'" ~ (escape_sequence | (!"'" ~ !"\\" ~ ANY))* ~ "'"
+}
+escape_sequence = @{ "\\" ~ ("t" | "n" | "r" | "\\" | "\"" | "'" | "/" | "u" ~ ASCII_HEX_DIGIT{4}) }
+boolean = @{ (^"true" | ^"false") ~ !ASCII_ALPHANUMERIC }
+null_literal = @{ ^"NULL" ~ !ASCII_ALPHANUMERIC }
+list_literal = { "[" ~ expression_list? ~ "]" }
+map_literal = { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
+map_entry = { property_key ~ ":" ~ expression }
+
+// --- Identifiers ---
+variable = { IDENTIFIER }
+IDENTIFIER = @{ !(reserved_word ~ !ASCII_ALPHANUMERIC) ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+reserved_word = {
+    ^"MATCH" | ^"OPTIONAL" | ^"CREATE" | ^"RETURN" | ^"WHERE"
+  | ^"ORDER" | ^"BY" | ^"SKIP" | ^"LIMIT" | ^"AND" | ^"OR"
+  | ^"NOT" | ^"XOR" | ^"NULL" | ^"TRUE" | ^"FALSE"
+  | ^"AS" | ^"ASC" | ^"ASCENDING" | ^"DESC" | ^"DESCENDING"
+  | ^"DISTINCT" | ^"IS" | ^"IN" | ^"STARTS" | ^"ENDS" | ^"CONTAINS"
+  | ^"CASE" | ^"WHEN" | ^"THEN" | ^"ELSE" | ^"END"
+  | ^"WITH" | ^"UNWIND" | ^"SET" | ^"REMOVE" | ^"DELETE" | ^"DETACH"
+  | ^"MERGE" | ^"ON"
+}

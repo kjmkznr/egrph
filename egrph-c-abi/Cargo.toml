@@ -8,3 +8,4 @@ crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 egrph-core = { path = "../egrph-core" }
+serde_json = "1.0"
