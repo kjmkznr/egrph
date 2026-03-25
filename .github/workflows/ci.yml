@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Rustフォーマットチェック ─────────────────────────────────────────
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ── Clippy (静的解析) ─────────────────────────────────────────────────
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Run Clippy
+        run: cargo clippy --workspace --exclude egrph-wasm -- -D warnings
+
+  # ── Rustネイティブテスト ──────────────────────────────────────────────
+  test:
+    name: Test (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Run tests
+        run: cargo test --workspace --exclude egrph-wasm
+
+  # ── WASMテスト (Node.js) ──────────────────────────────────────────────
+  test-wasm:
+    name: Test (WASM / Node.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+      - name: Run WASM tests
+        run: wasm-pack test egrph-wasm --node
+
+  # ── Goバインディングテスト ────────────────────────────────────────────
+  test-go:
+    name: Test (Go bindings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Build C ABI
+        run: cargo build --release -p egrph-c-abi
+      - name: Stage C ABI library for cgo
+        # egrph-go/egrph.go specifies `#cgo LDFLAGS: -L../egrph-c-abi -legrph`.
+        # Cargo outputs libegrph.{a,so} into target/release/; copy them to the
+        # directory the linker flag points to so cgo can find them.
+        run: cp target/release/libegrph.a target/release/libegrph.so egrph-c-abi/
+      - name: Run Go tests
+        working-directory: egrph-go
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/egrph-c-abi
+        run: go test ./...
