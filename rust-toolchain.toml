@@ -1,0 +1,8 @@
+[toolchain]
+# "1.94" receives patch releases (e.g. 1.94.1) for security/bug fixes while
+# keeping the minor version stable. Use "1.94.0" instead to pin absolutely.
+# Minimum for edition = "2024" is Rust 1.85; 1.94 is the team's standard
+# toolchain and the lowest version tested with these WASM bindings.
+channel = "1.94"
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]

@@ -4,4 +4,16 @@ members = [
     "egrph-core",
     "egrph-python",
     "egrph-c-abi",
+    "egrph-wasm",
 ]
+
+# lto applies to all crates (beneficial for native shared libs too).
+[profile.release]
+lto = true
+
+# WASM: optimize for binary size. Native crates keep the default opt-level=3.
+# Note: lto cannot be set in package overrides; it is workspace-level above.
+[profile.release.package.egrph-wasm]
+opt-level = "s"
+codegen-units = 1   # let LLVM see the whole crate at once; pairs well with lto
+strip = "symbols"   # strip debug symbols (wasm-opt does this too, but explicit avoids surprises)
