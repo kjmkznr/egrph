@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use crate::ast::{Expression, ReturnItem};
+use crate::error::CypherError;
+use crate::graph::storage::GraphStorage;
 use crate::graph::types::CypherValue;
 use super::expression::{Record, Parameters, eval_with_params, compare_values, cypher_value_to_stable_key};
 
@@ -70,7 +72,8 @@ pub fn execute_aggregation(
     input_records: &[Record],
     columns: &[String],
     params: &Parameters,
-) -> Vec<Record> {
+    storage: &GraphStorage,
+) -> Result<Vec<Record>, CypherError> {
 
     // Separate grouping keys from aggregate items
     let group_indices: Vec<usize> = items
@@ -92,12 +95,12 @@ pub fn execute_aggregation(
     let mut group_key_map: HashMap<String, usize> = HashMap::new();
 
     for rec in input_records {
-        let key_values: Vec<CypherValue> = group_indices
-            .iter()
-            .map(|&i| eval_with_params(&items[i].expression, rec, &params))
-            .collect();
+        let mut key_values: Vec<CypherValue> = Vec::with_capacity(group_indices.len());
+        for &i in &group_indices {
+            key_values.push(eval_with_params(&items[i].expression, rec, params, storage)?);
+        }
 
-        // Use a null byte as separator — it cannot appear inside any
+        // Use a null byte as separator -- it cannot appear inside any
         // cypher_value_to_stable_key output, so there is no collision risk.
         let key_str = key_values
             .iter()
@@ -118,7 +121,7 @@ pub fn execute_aggregation(
 
     // If no input records and there are no grouping keys, produce one empty row so that
     // pure aggregations like COUNT(*) return 0 rather than no rows at all.
-    // When grouping keys ARE present, empty input → empty output (no groups).
+    // When grouping keys ARE present, empty input -> empty output (no groups).
     if input_records.is_empty() && group_indices.is_empty() {
         groups.push((Vec::new(), Vec::new()));
     }
@@ -135,33 +138,33 @@ pub fn execute_aggregation(
 
         // Compute aggregate columns
         for &i in &agg_indices {
-            let val = compute_aggregate(&items[i].expression, &group_records, &params);
+            let val = compute_aggregate(&items[i].expression, &group_records, params, storage)?;
             out_rec.insert(columns[i].clone(), val);
         }
 
         result.push(out_rec);
     }
 
-    result
+    Ok(result)
 }
 
-fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters) -> CypherValue {
+fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters, storage: &GraphStorage) -> Result<CypherValue, CypherError> {
     match expr {
         Expression::FunctionCall { name, args, distinct } => {
             let lower = name.to_lowercase();
-            match lower.as_str() {
+            Ok(match lower.as_str() {
                 "count" => {
                     if args.is_empty() {
-                        // count(*) — count all rows
+                        // count(*) -- count all rows
                         CypherValue::Integer(records.len() as i64)
                     } else {
-                        let vals: Vec<CypherValue> = collect_non_null_values(&args[0], records, params, *distinct);
+                        let vals: Vec<CypherValue> = collect_non_null_values(&args[0], records, params, *distinct, storage)?;
                         CypherValue::Integer(vals.len() as i64)
                     }
                 }
                 "sum" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct);
+                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
                         sum_values(&vals)
                     } else {
                         CypherValue::Integer(0)
@@ -169,7 +172,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "avg" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct);
+                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
                         avg_values(&vals)
                     } else {
                         CypherValue::Null
@@ -177,7 +180,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "min" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, false);
+                        let vals = collect_non_null_values(arg, records, params, false, storage)?;
                         min_value(&vals)
                     } else {
                         CypherValue::Null
@@ -185,7 +188,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "max" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, false);
+                        let vals = collect_non_null_values(arg, records, params, false, storage)?;
                         max_value(&vals)
                     } else {
                         CypherValue::Null
@@ -193,7 +196,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "collect" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct);
+                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
                         CypherValue::List(vals)
                     } else {
                         CypherValue::List(Vec::new())
@@ -201,7 +204,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "stdev" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct);
+                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
                         stdev_values(&vals, true)
                     } else {
                         CypherValue::Null
@@ -209,7 +212,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "stdevp" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct);
+                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
                         stdev_values(&vals, false)
                     } else {
                         CypherValue::Null
@@ -217,8 +220,8 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "percentilecont" | "percentiledisc" => {
                     if args.len() >= 2 {
-                        let vals = collect_non_null_values(&args[0], records, params, false);
-                        let percentile_val = eval_with_params(&args[1], records.first().copied().unwrap_or(&Record::new()), params);
+                        let vals = collect_non_null_values(&args[0], records, params, false, storage)?;
+                        let percentile_val = eval_with_params(&args[1], records.first().copied().unwrap_or(&Record::new()), params, storage)?;
                         if let CypherValue::Float(p) = percentile_val {
                             if lower == "percentilecont" {
                                 percentile_cont(&vals, p)
@@ -240,13 +243,13 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                     }
                 }
                 _ => CypherValue::Null,
-            }
+            })
         }
         // For non-aggregate expressions inside aggregate context, evaluate against first record
         _ => {
             let empty = Record::new();
             let rec = records.first().copied().unwrap_or(&empty);
-            eval_with_params(expr, rec, params)
+            eval_with_params(expr, rec, params, storage)
         }
     }
 }
@@ -256,19 +259,22 @@ fn collect_non_null_values(
     records: &[&Record],
     params: &Parameters,
     distinct: bool,
-) -> Vec<CypherValue> {
-    let mut vals: Vec<CypherValue> = records
-        .iter()
-        .map(|rec| eval_with_params(expr, rec, params))
-        .filter(|v| !matches!(v, CypherValue::Null))
-        .collect();
+    storage: &GraphStorage,
+) -> Result<Vec<CypherValue>, CypherError> {
+    let mut vals: Vec<CypherValue> = Vec::new();
+    for rec in records {
+        let v = eval_with_params(expr, rec, params, storage)?;
+        if !matches!(v, CypherValue::Null) {
+            vals.push(v);
+        }
+    }
 
     if distinct {
         let mut seen = std::collections::HashSet::new();
         vals.retain(|v| seen.insert(cypher_value_to_stable_key(v)));
     }
 
-    vals
+    Ok(vals)
 }
 
 fn to_f64(v: &CypherValue) -> Option<f64> {
@@ -296,7 +302,7 @@ fn sum_values(vals: &[CypherValue]) -> CypherValue {
         }
         CypherValue::Integer(acc)
     } else {
-        let s: f64 = vals.iter().filter_map(|v| to_f64(v)).sum();
+        let s: f64 = vals.iter().filter_map(to_f64).sum();
         CypherValue::Float(s)
     }
 }
@@ -305,7 +311,7 @@ fn avg_values(vals: &[CypherValue]) -> CypherValue {
     if vals.is_empty() {
         return CypherValue::Null;
     }
-    let sum: f64 = vals.iter().filter_map(|v| to_f64(v)).sum();
+    let sum: f64 = vals.iter().filter_map(to_f64).sum();
     CypherValue::Float(sum / vals.len() as f64)
 }
 
@@ -322,7 +328,7 @@ fn max_value(vals: &[CypherValue]) -> CypherValue {
 }
 
 fn stdev_values(vals: &[CypherValue], sample: bool) -> CypherValue {
-    let floats: Vec<f64> = vals.iter().filter_map(|v| to_f64(v)).collect();
+    let floats: Vec<f64> = vals.iter().filter_map(to_f64).collect();
     if floats.is_empty() {
         return CypherValue::Null;
     }
@@ -345,7 +351,7 @@ fn percentile_cont(vals: &[CypherValue], p: f64) -> CypherValue {
     if vals.is_empty() {
         return CypherValue::Null;
     }
-    let mut floats: Vec<f64> = vals.iter().filter_map(|v| to_f64(v)).collect();
+    let mut floats: Vec<f64> = vals.iter().filter_map(to_f64).collect();
     if floats.is_empty() {
         return CypherValue::Null;
     }

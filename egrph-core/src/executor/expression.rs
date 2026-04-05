@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::cell::RefCell;
 use regex::Regex;
 use crate::ast::*;
+use crate::error::CypherError;
+use crate::graph::storage::GraphStorage;
 use crate::graph::types::*;
 
 // Thread-local cache so each compiled Regex is built at most once per thread.
@@ -15,124 +17,127 @@ pub type Record = HashMap<String, CypherValue>;
 /// Parameters passed to a query.
 pub type Parameters = HashMap<String, CypherValue>;
 
-/// Evaluate an expression against a record (variable bindings).
-pub fn eval(expr: &Expression, record: &Record) -> CypherValue {
-    eval_with_params(expr, record, &HashMap::new())
-}
-
 /// Evaluate an expression with both variable bindings and query parameters.
-pub fn eval_with_params(expr: &Expression, record: &Record, params: &Parameters) -> CypherValue {
-    match expr {
-        Expression::Literal(lit) => eval_literal(lit, record, params),
+pub fn eval_with_params(expr: &Expression, record: &Record, params: &Parameters, storage: &GraphStorage) -> Result<CypherValue, CypherError> {
+    Ok(match expr {
+        Expression::Literal(lit) => eval_literal(lit, record, params, storage)?,
         Expression::Variable(name) => {
             record.get(name).cloned().unwrap_or(CypherValue::Null)
         }
         Expression::Property(base_expr, prop_name) => {
-            let base = eval_with_params(base_expr, record, params);
+            let base = eval_with_params(base_expr, record, params, storage)?;
             get_property(&base, prop_name)
         }
         Expression::BinaryOp { left, op, right } => {
-            let l = eval_with_params(left, record, params);
-            let r = eval_with_params(right, record, params);
-            eval_binary_op(&l, op, &r)
+            let l = eval_with_params(left, record, params, storage)?;
+            let r = eval_with_params(right, record, params, storage)?;
+            eval_binary_op(&l, op, &r)?
         }
         Expression::UnaryOp { op, operand } => {
-            let v = eval_with_params(operand, record, params);
+            let v = eval_with_params(operand, record, params, storage)?;
             eval_unary_op(op, &v)
         }
         Expression::Comparison { left, op, right } => {
-            let l = eval_with_params(left, record, params);
-            let r = eval_with_params(right, record, params);
+            let l = eval_with_params(left, record, params, storage)?;
+            let r = eval_with_params(right, record, params, storage)?;
             eval_comparison(&l, op, &r)
         }
         Expression::And(left, right) => {
-            let l = eval_with_params(left, record, params);
-            let r = eval_with_params(right, record, params);
+            let l = eval_with_params(left, record, params, storage)?;
+            let r = eval_with_params(right, record, params, storage)?;
             eval_and(&l, &r)
         }
         Expression::Or(left, right) => {
-            let l = eval_with_params(left, record, params);
-            let r = eval_with_params(right, record, params);
+            let l = eval_with_params(left, record, params, storage)?;
+            let r = eval_with_params(right, record, params, storage)?;
             eval_or(&l, &r)
         }
         Expression::Xor(left, right) => {
-            let l = eval_with_params(left, record, params);
-            let r = eval_with_params(right, record, params);
+            let l = eval_with_params(left, record, params, storage)?;
+            let r = eval_with_params(right, record, params, storage)?;
             eval_xor(&l, &r)
         }
         Expression::Not(operand) => {
-            let v = eval_with_params(operand, record, params);
+            let v = eval_with_params(operand, record, params, storage)?;
             eval_not(&v)
         }
         Expression::IsNull(operand) => {
-            let v = eval_with_params(operand, record, params);
+            let v = eval_with_params(operand, record, params, storage)?;
             CypherValue::Boolean(matches!(v, CypherValue::Null))
         }
         Expression::IsNotNull(operand) => {
-            let v = eval_with_params(operand, record, params);
+            let v = eval_with_params(operand, record, params, storage)?;
             CypherValue::Boolean(!matches!(v, CypherValue::Null))
         }
         Expression::FunctionCall { name, args, .. } => {
-            eval_function(name, args, record, params)
+            eval_function(name, args, record, params, storage)?
         }
         Expression::StringOp { left, op, right } => {
-            let l = eval_with_params(left, record, params);
-            let r = eval_with_params(right, record, params);
+            let l = eval_with_params(left, record, params, storage)?;
+            let r = eval_with_params(right, record, params, storage)?;
             eval_string_op(&l, op, &r)
         }
         Expression::RegexMatch { expr: e, pattern } => {
-            let val = eval_with_params(e, record, params);
-            let pat = eval_with_params(pattern, record, params);
+            let val = eval_with_params(e, record, params, storage)?;
+            let pat = eval_with_params(pattern, record, params, storage)?;
             eval_regex_match(&val, &pat)
         }
         Expression::In { expr: e, list } => {
-            let val = eval_with_params(e, record, params);
-            let list_val = eval_with_params(list, record, params);
+            let val = eval_with_params(e, record, params, storage)?;
+            let list_val = eval_with_params(list, record, params, storage)?;
             eval_in(&val, &list_val)
         }
         Expression::DynamicProperty { expr: e, key } => {
-            let base = eval_with_params(e, record, params);
-            let key_val = eval_with_params(key, record, params);
+            let base = eval_with_params(e, record, params, storage)?;
+            let key_val = eval_with_params(key, record, params, storage)?;
             eval_dynamic_property(&base, &key_val)
         }
         Expression::ListSlice { expr: e, start, end } => {
-            let base = eval_with_params(e, record, params);
-            let start_val = start.as_ref().map(|s| eval_with_params(s, record, params));
-            let end_val = end.as_ref().map(|e| eval_with_params(e, record, params));
+            let base = eval_with_params(e, record, params, storage)?;
+            let start_val = match start.as_ref() {
+                Some(s) => Some(eval_with_params(s, record, params, storage)?),
+                None => None,
+            };
+            let end_val = match end.as_ref() {
+                Some(e) => Some(eval_with_params(e, record, params, storage)?),
+                None => None,
+            };
             eval_list_slice(&base, start_val.as_ref(), end_val.as_ref())
         }
         Expression::Case { operand, alternatives, default } => {
-            eval_case(operand.as_deref(), alternatives, default.as_deref(), record, params)
+            eval_case(operand.as_deref(), alternatives, default.as_deref(), record, params, storage)?
         }
         Expression::ListComprehension { variable, list, predicate, map_expr } => {
-            eval_list_comprehension(variable, list, predicate.as_deref(), map_expr.as_deref(), record, params)
+            eval_list_comprehension(variable, list, predicate.as_deref(), map_expr.as_deref(), record, params, storage)?
         }
         Expression::Parameter(name) => {
             params.get(name).cloned().unwrap_or(CypherValue::Null)
         }
-    }
+    })
 }
 
-fn eval_literal(lit: &Literal, record: &Record, params: &Parameters) -> CypherValue {
-    match lit {
+fn eval_literal(lit: &Literal, record: &Record, params: &Parameters, storage: &GraphStorage) -> Result<CypherValue, CypherError> {
+    Ok(match lit {
         Literal::Integer(i) => CypherValue::Integer(*i),
         Literal::Float(f) => CypherValue::Float(*f),
         Literal::String(s) => CypherValue::String(s.clone()),
         Literal::Boolean(b) => CypherValue::Boolean(*b),
         Literal::Null => CypherValue::Null,
         Literal::List(exprs) => {
-            let items = exprs.iter().map(|e| eval_with_params(e, record, params)).collect();
+            let mut items = Vec::with_capacity(exprs.len());
+            for e in exprs {
+                items.push(eval_with_params(e, record, params, storage)?);
+            }
             CypherValue::List(items)
         }
         Literal::Map(map_lit) => {
-            let entries = map_lit
-                .entries
-                .iter()
-                .map(|(k, v)| (k.clone(), eval_with_params(v, record, params)))
-                .collect();
+            let mut entries = HashMap::new();
+            for (k, v) in &map_lit.entries {
+                entries.insert(k.clone(), eval_with_params(v, record, params, storage)?);
+            }
             CypherValue::Map(entries)
         }
-    }
+    })
 }
 
 fn get_property(value: &CypherValue, prop_name: &str) -> CypherValue {
@@ -174,56 +179,56 @@ fn to_f64(v: &CypherValue) -> Option<f64> {
     }
 }
 
-fn eval_binary_op(left: &CypherValue, op: &BinaryOp, right: &CypherValue) -> CypherValue {
+fn eval_binary_op(left: &CypherValue, op: &BinaryOp, right: &CypherValue) -> Result<CypherValue, CypherError> {
     if matches!(left, CypherValue::Null) || matches!(right, CypherValue::Null) {
-        return CypherValue::Null;
+        return Ok(CypherValue::Null);
     }
 
     // String concatenation with +
-    if matches!(op, BinaryOp::Add) {
-        if let (CypherValue::String(l), CypherValue::String(r)) = (left, right) {
-            return CypherValue::String(format!("{}{}", l, r));
-        }
+    if matches!(op, BinaryOp::Add)
+        && let (CypherValue::String(l), CypherValue::String(r)) = (left, right)
+    {
+        return Ok(CypherValue::String(format!("{}{}", l, r)));
     }
 
     // List concatenation with +
-    if matches!(op, BinaryOp::Add) {
-        if let (CypherValue::List(l), CypherValue::List(r)) = (left, right) {
-            let mut result = l.clone();
-            result.extend(r.clone());
-            return CypherValue::List(result);
-        }
+    if matches!(op, BinaryOp::Add)
+        && let (CypherValue::List(l), CypherValue::List(r)) = (left, right)
+    {
+        let mut result = l.clone();
+        result.extend(r.clone());
+        return Ok(CypherValue::List(result));
     }
 
     // Integer arithmetic when both are integers (except Div which may produce Float)
     if let (CypherValue::Integer(l), CypherValue::Integer(r)) = (left, right) {
-        return match op {
+        return Ok(match op {
             BinaryOp::Add => l.checked_add(*r).map(CypherValue::Integer).unwrap_or(CypherValue::Null),
             BinaryOp::Sub => l.checked_sub(*r).map(CypherValue::Integer).unwrap_or(CypherValue::Null),
             BinaryOp::Mul => l.checked_mul(*r).map(CypherValue::Integer).unwrap_or(CypherValue::Null),
             BinaryOp::Div => {
                 if *r == 0 {
-                    CypherValue::Null
+                    return Err(CypherError::RuntimeError("Division by zero".to_string()));
                 } else {
                     l.checked_div(*r).map(CypherValue::Integer).unwrap_or(CypherValue::Null)
                 }
             }
             BinaryOp::Mod => {
                 if *r == 0 {
-                    CypherValue::Null
+                    return Err(CypherError::RuntimeError("Division by zero".to_string()));
                 } else {
                     l.checked_rem(*r).map(CypherValue::Integer).unwrap_or(CypherValue::Null)
                 }
             }
             BinaryOp::Pow => CypherValue::Float((*l as f64).powf(*r as f64)),
-        };
+        });
     }
 
     // Float arithmetic
     let l = to_f64(left);
     let r = to_f64(right);
     if let (Some(l), Some(r)) = (l, r) {
-        return match op {
+        return Ok(match op {
             BinaryOp::Add => CypherValue::Float(l + r),
             BinaryOp::Sub => CypherValue::Float(l - r),
             BinaryOp::Mul => CypherValue::Float(l * r),
@@ -242,10 +247,10 @@ fn eval_binary_op(left: &CypherValue, op: &BinaryOp, right: &CypherValue) -> Cyp
                 }
             }
             BinaryOp::Pow => CypherValue::Float(l.powf(r)),
-        };
+        });
     }
 
-    CypherValue::Null
+    Ok(CypherValue::Null)
 }
 
 fn eval_unary_op(op: &UnaryOp, value: &CypherValue) -> CypherValue {
@@ -364,10 +369,10 @@ fn eval_regex_match(value: &CypherValue, pattern: &CypherValue) -> CypherValue {
             let is_match = REGEX_CACHE.with(|cache| {
                 let mut map = cache.borrow_mut();
                 // Evict oldest entry when cache reaches limit to bound memory usage.
-                if map.len() >= 256 && !map.contains_key(&full_pattern) {
-                    if let Some(key) = map.keys().next().cloned() {
-                        map.remove(&key);
-                    }
+                if map.len() >= 256 && !map.contains_key(&full_pattern)
+                    && let Some(key) = map.keys().next().cloned()
+                {
+                    map.remove(&key);
                 }
                 let entry = map.entry(full_pattern.clone()).or_insert_with(|| Regex::new(&full_pattern).ok());
                 entry.as_ref().map(|re| re.is_match(s))
@@ -466,7 +471,7 @@ fn eval_list_slice(base: &CypherValue, start: Option<&CypherValue>, end: Option<
             }
         }
         CypherValue::String(s) => {
-            // String slicing (same semantics as list slicing) — use char indices
+            // String slicing (same semantics as list slicing) -- use char indices
             let char_count = s.chars().count() as i64;
             let resolve_idx = |val: Option<&CypherValue>, default: i64| -> i64 {
                 match val {
@@ -499,32 +504,33 @@ fn eval_case(
     default: Option<&Expression>,
     record: &Record,
     params: &Parameters,
-) -> CypherValue {
+    storage: &GraphStorage,
+) -> Result<CypherValue, CypherError> {
     match operand {
         Some(op_expr) => {
             // Simple CASE: CASE expr WHEN val1 THEN result1 ...
-            let op_val = eval_with_params(op_expr, record, params);
+            let op_val = eval_with_params(op_expr, record, params, storage)?;
             for alt in alternatives {
-                let when_val = eval_with_params(&alt.when, record, params);
+                let when_val = eval_with_params(&alt.when, record, params, storage)?;
                 if let Some(std::cmp::Ordering::Equal) = compare_values(&op_val, &when_val) {
-                    return eval_with_params(&alt.then, record, params);
+                    return eval_with_params(&alt.then, record, params, storage);
                 }
             }
         }
         None => {
             // General CASE: CASE WHEN pred1 THEN result1 ...
             for alt in alternatives {
-                let when_val = eval_with_params(&alt.when, record, params);
+                let when_val = eval_with_params(&alt.when, record, params, storage)?;
                 if is_truthy(&when_val) {
-                    return eval_with_params(&alt.then, record, params);
+                    return eval_with_params(&alt.then, record, params, storage);
                 }
             }
         }
     }
     // No match - return default or null
     match default {
-        Some(def) => eval_with_params(def, record, params),
-        None => CypherValue::Null,
+        Some(def) => eval_with_params(def, record, params, storage),
+        None => Ok(CypherValue::Null),
     }
 }
 
@@ -537,9 +543,10 @@ fn eval_list_comprehension(
     map_expr: Option<&Expression>,
     record: &Record,
     params: &Parameters,
-) -> CypherValue {
-    let list_val = eval_with_params(list, record, params);
-    match list_val {
+    storage: &GraphStorage,
+) -> Result<CypherValue, CypherError> {
+    let list_val = eval_with_params(list, record, params, storage)?;
+    Ok(match list_val {
         CypherValue::List(items) => {
             let mut result = Vec::new();
             for item in items {
@@ -548,7 +555,7 @@ fn eval_list_comprehension(
 
                 // Apply predicate filter if present
                 if let Some(pred) = predicate {
-                    let pred_val = eval_with_params(pred, &inner_rec, params);
+                    let pred_val = eval_with_params(pred, &inner_rec, params, storage)?;
                     if !is_truthy(&pred_val) {
                         continue;
                     }
@@ -556,7 +563,7 @@ fn eval_list_comprehension(
 
                 // Apply map expression if present
                 let output = match map_expr {
-                    Some(me) => eval_with_params(me, &inner_rec, params),
+                    Some(me) => eval_with_params(me, &inner_rec, params, storage)?,
                     None => inner_rec.get(variable).cloned().unwrap_or(CypherValue::Null),
                 };
                 result.push(output);
@@ -565,18 +572,18 @@ fn eval_list_comprehension(
         }
         CypherValue::Null => CypherValue::Null,
         _ => CypherValue::Null,
-    }
+    })
 }
 
 // --- Built-in functions ---
 
-fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Parameters) -> CypherValue {
+fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Parameters, storage: &GraphStorage) -> Result<CypherValue, CypherError> {
     let lower = name.to_lowercase();
-    match lower.as_str() {
+    Ok(match lower.as_str() {
         "__has_label" => {
             if args.len() == 2 {
-                let node_val = eval_with_params(&args[0], record, params);
-                let label_val = eval_with_params(&args[1], record, params);
+                let node_val = eval_with_params(&args[0], record, params, storage)?;
+                let label_val = eval_with_params(&args[1], record, params, storage)?;
                 if let (CypherValue::Node(node), CypherValue::String(label)) = (&node_val, &label_val) {
                     CypherValue::Boolean(node.labels.iter().any(|l| l == label))
                 } else {
@@ -588,7 +595,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "id" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Node(n) => CypherValue::Integer(n.id as i64),
                     CypherValue::Relationship(e) => CypherValue::Integer(e.id as i64),
@@ -600,7 +607,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "type" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 if let CypherValue::Relationship(e) = &val {
                     CypherValue::String(e.label.clone())
                 } else {
@@ -612,7 +619,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "labels" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 if let CypherValue::Node(n) = &val {
                     CypherValue::List(
                         n.labels.iter().map(|l| CypherValue::String(l.clone())).collect(),
@@ -632,16 +639,16 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "coalesce" => {
             for arg in args {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 if !matches!(val, CypherValue::Null) {
-                    return val;
+                    return Ok(val);
                 }
             }
             CypherValue::Null
         }
         "tostring" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 if matches!(val, CypherValue::Null) {
                     CypherValue::Null
                 } else {
@@ -653,7 +660,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "tointeger" | "toint" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Null => CypherValue::Null,
                     CypherValue::Integer(_) => val,
@@ -677,7 +684,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "tofloat" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Null => CypherValue::Null,
                     CypherValue::Float(_) => val,
@@ -693,7 +700,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "toboolean" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Null => CypherValue::Null,
                     CypherValue::Boolean(_) => val,
@@ -714,7 +721,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         // String functions
         "size" | "length" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::String(s) => CypherValue::Integer(s.chars().count() as i64),
                     CypherValue::List(l) => CypherValue::Integer(l.len() as i64),
@@ -725,14 +732,14 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                 CypherValue::Null
             }
         }
-        "trim" => string_fn_1(args, record, params, |s| s.trim().to_string()),
-        "ltrim" => string_fn_1(args, record, params, |s| s.trim_start().to_string()),
-        "rtrim" => string_fn_1(args, record, params, |s| s.trim_end().to_string()),
-        "toupper" => string_fn_1(args, record, params, |s| s.to_uppercase()),
-        "tolower" => string_fn_1(args, record, params, |s| s.to_lowercase()),
+        "trim" => string_fn_1(args, record, params, storage, |s| s.trim().to_string())?,
+        "ltrim" => string_fn_1(args, record, params, storage, |s| s.trim_start().to_string())?,
+        "rtrim" => string_fn_1(args, record, params, storage, |s| s.trim_end().to_string())?,
+        "toupper" => string_fn_1(args, record, params, storage, |s| s.to_uppercase())?,
+        "tolower" => string_fn_1(args, record, params, storage, |s| s.to_lowercase())?,
         "reverse" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::String(s) => CypherValue::String(s.chars().rev().collect()),
                     CypherValue::List(l) => CypherValue::List(l.iter().rev().cloned().collect()),
@@ -745,9 +752,9 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "replace" => {
             if args.len() >= 3 {
-                let val = eval_with_params(&args[0], record, params);
-                let search = eval_with_params(&args[1], record, params);
-                let replacement = eval_with_params(&args[2], record, params);
+                let val = eval_with_params(&args[0], record, params, storage)?;
+                let search = eval_with_params(&args[1], record, params, storage)?;
+                let replacement = eval_with_params(&args[2], record, params, storage)?;
                 match (&val, &search, &replacement) {
                     (CypherValue::String(s), CypherValue::String(f), CypherValue::String(r)) => {
                         CypherValue::String(s.replace(f.as_str(), r.as_str()))
@@ -763,10 +770,10 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "substring" => {
             if args.len() >= 2 {
-                let val = eval_with_params(&args[0], record, params);
-                let start = eval_with_params(&args[1], record, params);
+                let val = eval_with_params(&args[0], record, params, storage)?;
+                let start = eval_with_params(&args[1], record, params, storage)?;
                 let length = if args.len() >= 3 {
-                    Some(eval_with_params(&args[2], record, params))
+                    Some(eval_with_params(&args[2], record, params, storage)?)
                 } else {
                     None
                 };
@@ -775,7 +782,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                         let char_count = s.chars().count();
                         let start_idx = (*start_idx).max(0) as usize;
                         if start_idx >= char_count {
-                            return CypherValue::String(String::new());
+                            return Ok(CypherValue::String(String::new()));
                         }
                         match length {
                             Some(CypherValue::Integer(len)) => {
@@ -797,8 +804,8 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "left" => {
             if args.len() >= 2 {
-                let val = eval_with_params(&args[0], record, params);
-                let n = eval_with_params(&args[1], record, params);
+                let val = eval_with_params(&args[0], record, params, storage)?;
+                let n = eval_with_params(&args[1], record, params, storage)?;
                 match (&val, &n) {
                     (CypherValue::String(s), CypherValue::Integer(n)) => {
                         CypherValue::String(s.chars().take((*n).max(0) as usize).collect())
@@ -814,13 +821,13 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "right" => {
             if args.len() >= 2 {
-                let val = eval_with_params(&args[0], record, params);
-                let n = eval_with_params(&args[1], record, params);
+                let val = eval_with_params(&args[0], record, params, storage)?;
+                let n = eval_with_params(&args[1], record, params, storage)?;
                 match (&val, &n) {
                     (CypherValue::String(s), CypherValue::Integer(n)) => {
                         let n = (*n).max(0) as usize;
                         let char_count = s.chars().count();
-                        let skip = if n >= char_count { 0 } else { char_count - n };
+                        let skip = char_count.saturating_sub(n);
                         CypherValue::String(s.chars().skip(skip).collect())
                     }
                     _ if matches!(&val, CypherValue::Null) || matches!(&n, CypherValue::Null) => {
@@ -834,8 +841,8 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "split" => {
             if args.len() >= 2 {
-                let val = eval_with_params(&args[0], record, params);
-                let sep = eval_with_params(&args[1], record, params);
+                let val = eval_with_params(&args[0], record, params, storage)?;
+                let sep = eval_with_params(&args[1], record, params, storage)?;
                 match (&val, &sep) {
                     (CypherValue::String(s), CypherValue::String(d)) => {
                         CypherValue::List(
@@ -852,15 +859,15 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
             }
         }
         // Math functions
-        "abs" => math_fn_1(args, record, params, |v| match v {
+        "abs" => math_fn_1(args, record, params, storage, |v| match v {
             CypherValue::Integer(i) => CypherValue::Integer(i.abs()),
             CypherValue::Float(f) => CypherValue::Float(f.abs()),
             _ => CypherValue::Null,
-        }),
-        "ceil" => math_fn_1_f64(args, record, params, f64::ceil),
-        "floor" => math_fn_1_f64(args, record, params, f64::floor),
-        "round" => math_fn_1_f64(args, record, params, f64::round),
-        "sign" => math_fn_1(args, record, params, |v| {
+        })?,
+        "ceil" => math_fn_1_f64(args, record, params, storage, f64::ceil)?,
+        "floor" => math_fn_1_f64(args, record, params, storage, f64::floor)?,
+        "round" => math_fn_1_f64(args, record, params, storage, f64::round)?,
+        "sign" => math_fn_1(args, record, params, storage, |v| {
             match v {
                 CypherValue::Integer(i) => CypherValue::Integer(i.signum()),
                 CypherValue::Float(f) => {
@@ -870,21 +877,21 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                 }
                 _ => CypherValue::Null,
             }
-        }),
-        "sqrt" => math_fn_1_f64(args, record, params, f64::sqrt),
-        "log" => math_fn_1_f64(args, record, params, f64::ln),
-        "log10" => math_fn_1_f64(args, record, params, f64::log10),
-        "exp" => math_fn_1_f64(args, record, params, f64::exp),
-        "sin" => math_fn_1_f64(args, record, params, f64::sin),
-        "cos" => math_fn_1_f64(args, record, params, f64::cos),
-        "tan" => math_fn_1_f64(args, record, params, f64::tan),
-        "asin" => math_fn_1_f64(args, record, params, f64::asin),
-        "acos" => math_fn_1_f64(args, record, params, f64::acos),
-        "atan" => math_fn_1_f64(args, record, params, f64::atan),
+        })?,
+        "sqrt" => math_fn_1_f64(args, record, params, storage, f64::sqrt)?,
+        "log" => math_fn_1_f64(args, record, params, storage, f64::ln)?,
+        "log10" => math_fn_1_f64(args, record, params, storage, f64::log10)?,
+        "exp" => math_fn_1_f64(args, record, params, storage, f64::exp)?,
+        "sin" => math_fn_1_f64(args, record, params, storage, f64::sin)?,
+        "cos" => math_fn_1_f64(args, record, params, storage, f64::cos)?,
+        "tan" => math_fn_1_f64(args, record, params, storage, f64::tan)?,
+        "asin" => math_fn_1_f64(args, record, params, storage, f64::asin)?,
+        "acos" => math_fn_1_f64(args, record, params, storage, f64::acos)?,
+        "atan" => math_fn_1_f64(args, record, params, storage, f64::atan)?,
         "atan2" => {
             if args.len() >= 2 {
-                let y = eval_with_params(&args[0], record, params);
-                let x = eval_with_params(&args[1], record, params);
+                let y = eval_with_params(&args[0], record, params, storage)?;
+                let x = eval_with_params(&args[1], record, params, storage)?;
                 match (to_f64(&y), to_f64(&x)) {
                     (Some(y), Some(x)) => CypherValue::Float(y.atan2(x)),
                     _ => CypherValue::Null,
@@ -893,15 +900,15 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                 CypherValue::Null
             }
         }
-        "degrees" => math_fn_1_f64(args, record, params, f64::to_degrees),
-        "radians" => math_fn_1_f64(args, record, params, f64::to_radians),
+        "degrees" => math_fn_1_f64(args, record, params, storage, f64::to_degrees)?,
+        "radians" => math_fn_1_f64(args, record, params, storage, f64::to_radians)?,
         "pi" => CypherValue::Float(std::f64::consts::PI),
         "e" => CypherValue::Float(std::f64::consts::E),
         "rand" => CypherValue::Float(pseudo_rand()),
         // List functions
         "head" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match val {
                     CypherValue::List(items) => items.into_iter().next().unwrap_or(CypherValue::Null),
                     CypherValue::Null => CypherValue::Null,
@@ -913,7 +920,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "last" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match val {
                     CypherValue::List(items) => items.into_iter().last().unwrap_or(CypherValue::Null),
                     CypherValue::Null => CypherValue::Null,
@@ -925,7 +932,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "tail" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match val {
                     CypherValue::List(items) => {
                         if items.is_empty() {
@@ -944,17 +951,17 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         "range" => {
             match args.len() {
                 2 | 3 => {
-                    let start = eval_with_params(&args[0], record, params);
-                    let end = eval_with_params(&args[1], record, params);
+                    let start = eval_with_params(&args[0], record, params, storage)?;
+                    let end = eval_with_params(&args[1], record, params, storage)?;
                     let step = if args.len() == 3 {
-                        eval_with_params(&args[2], record, params)
+                        eval_with_params(&args[2], record, params, storage)?
                     } else {
                         CypherValue::Integer(1)
                     };
                     match (&start, &end, &step) {
                         (CypherValue::Integer(s), CypherValue::Integer(e), CypherValue::Integer(st)) => {
                             if *st == 0 {
-                                return CypherValue::Null;
+                                return Ok(CypherValue::Null);
                             }
                             let mut result = Vec::new();
                             let mut i = *s;
@@ -979,7 +986,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "keys" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Node(n) => {
                         CypherValue::List(n.properties.keys().map(|k| CypherValue::String(k.clone())).collect())
@@ -999,7 +1006,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "properties" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Node(n) => {
                         CypherValue::Map(
@@ -1025,7 +1032,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "exists" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 CypherValue::Boolean(!matches!(val, CypherValue::Null))
             } else {
                 CypherValue::Null
@@ -1033,14 +1040,14 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "startnode" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Relationship(e) => {
-                        // Look up the start node in the current record bindings
                         let src_id = e.src;
                         record.values()
                             .find(|v| matches!(v, CypherValue::Node(n) if n.id == src_id))
                             .cloned()
+                            .or_else(|| storage.get_node(src_id).map(|n| CypherValue::Node(n.clone())))
                             .unwrap_or(CypherValue::Null)
                     }
                     CypherValue::Null => CypherValue::Null,
@@ -1052,14 +1059,14 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "endnode" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::Relationship(e) => {
-                        // Look up the end node in the current record bindings
                         let dst_id = e.dst;
                         record.values()
                             .find(|v| matches!(v, CypherValue::Node(n) if n.id == dst_id))
                             .cloned()
+                            .or_else(|| storage.get_node(dst_id).map(|n| CypherValue::Node(n.clone())))
                             .unwrap_or(CypherValue::Null)
                     }
                     CypherValue::Null => CypherValue::Null,
@@ -1071,7 +1078,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "nodes" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match val {
                     CypherValue::Path(p) => {
                         CypherValue::List(p.nodes.into_iter().map(CypherValue::Node).collect())
@@ -1085,7 +1092,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         "relationships" | "rels" => {
             if let Some(arg) = args.first() {
-                let val = eval_with_params(arg, record, params);
+                let val = eval_with_params(arg, record, params, storage)?;
                 match val {
                     CypherValue::Path(p) => {
                         CypherValue::List(p.relationships.into_iter().map(CypherValue::Relationship).collect())
@@ -1097,10 +1104,10 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                 CypherValue::Null
             }
         }
-        "cot" => math_fn_1_f64(args, record, params, |x| 1.0 / x.tan()),
-        "haversin" => math_fn_1_f64(args, record, params, |x| (1.0 - x.cos()) / 2.0),
+        "cot" => math_fn_1_f64(args, record, params, storage, |x| 1.0 / x.tan())?,
+        "haversin" => math_fn_1_f64(args, record, params, storage, |x| (1.0 - x.cos()) / 2.0)?,
         _ => CypherValue::Null,
-    }
+    })
 }
 
 // Helper for single-arg string functions
@@ -1108,17 +1115,18 @@ fn string_fn_1(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
+    storage: &GraphStorage,
     f: impl Fn(&str) -> String,
-) -> CypherValue {
+) -> Result<CypherValue, CypherError> {
     if let Some(arg) = args.first() {
-        let val = eval_with_params(arg, record, params);
-        match &val {
+        let val = eval_with_params(arg, record, params, storage)?;
+        Ok(match &val {
             CypherValue::String(s) => CypherValue::String(f(s)),
             CypherValue::Null => CypherValue::Null,
             _ => CypherValue::Null,
-        }
+        })
     } else {
-        CypherValue::Null
+        Ok(CypherValue::Null)
     }
 }
 
@@ -1127,16 +1135,17 @@ fn math_fn_1_f64(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
+    storage: &GraphStorage,
     f: impl Fn(f64) -> f64,
-) -> CypherValue {
+) -> Result<CypherValue, CypherError> {
     if let Some(arg) = args.first() {
-        let val = eval_with_params(arg, record, params);
-        match to_f64(&val) {
+        let val = eval_with_params(arg, record, params, storage)?;
+        Ok(match to_f64(&val) {
             Some(v) => CypherValue::Float(f(v)),
             None => CypherValue::Null,
-        }
+        })
     } else {
-        CypherValue::Null
+        Ok(CypherValue::Null)
     }
 }
 
@@ -1145,17 +1154,18 @@ fn math_fn_1(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
+    storage: &GraphStorage,
     f: impl Fn(CypherValue) -> CypherValue,
-) -> CypherValue {
+) -> Result<CypherValue, CypherError> {
     if let Some(arg) = args.first() {
-        let val = eval_with_params(arg, record, params);
+        let val = eval_with_params(arg, record, params, storage)?;
         if matches!(val, CypherValue::Null) {
-            CypherValue::Null
+            Ok(CypherValue::Null)
         } else {
-            f(val)
+            Ok(f(val))
         }
     } else {
-        CypherValue::Null
+        Ok(CypherValue::Null)
     }
 }
 

@@ -1,5 +1,3 @@
-/// Query result types for the Cypher executor.
-
 use crate::graph::types::CypherValue;
 
 /// A single row of results.

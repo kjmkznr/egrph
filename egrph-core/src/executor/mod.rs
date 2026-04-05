@@ -8,7 +8,7 @@ use crate::error::CypherError;
 use crate::graph::storage::GraphStorage;
 use crate::graph::types::*;
 use crate::planner::plan::LogicalPlan;
-use self::expression::{Record, Parameters, eval, is_truthy, compare_values, cypher_value_to_stable_key};
+use self::expression::{Record, Parameters, eval_with_params, is_truthy, compare_values, cypher_value_to_stable_key};
 use self::result::{QueryResult, ResultRow};
 use self::aggregation::{items_contain_aggregation, execute_aggregation};
 
@@ -58,10 +58,10 @@ fn execute_to_records(
         } => {
             let (mut cols, input_records) = execute_to_records(input, storage, params)?;
 
-            if let Some(rv) = rel_variable {
-                if !cols.contains(rv) {
-                    cols.push(rv.clone());
-                }
+            if let Some(rv) = rel_variable
+                && !cols.contains(rv)
+            {
+                cols.push(rv.clone());
             }
             if !cols.contains(dst_variable) {
                 cols.push(dst_variable.clone());
@@ -116,10 +116,12 @@ fn execute_to_records(
 
         LogicalPlan::Filter { input, predicate } => {
             let (cols, records) = execute_to_records(input, storage, params)?;
-            let filtered: Vec<Record> = records
-                .into_iter()
-                .filter(|rec| is_truthy(&eval(predicate, rec)))
-                .collect();
+            let mut filtered: Vec<Record> = Vec::new();
+            for rec in records {
+                if is_truthy(&eval_with_params(predicate, &rec, params, storage)?) {
+                    filtered.push(rec);
+                }
+            }
             Ok((cols, filtered))
         }
 
@@ -134,19 +136,18 @@ fn execute_to_records(
                 .collect();
 
             let mut rows: Vec<Record> = if items_contain_aggregation(items) {
-                execute_aggregation(items, &input_records, &columns, params)
+                execute_aggregation(items, &input_records, &columns, params, storage)?
             } else {
-                input_records
-                    .iter()
-                    .map(|rec| {
-                        let mut new_rec = Record::new();
-                        for (i, item) in items.iter().enumerate() {
-                            let val = eval(&item.expression, rec);
-                            new_rec.insert(columns[i].clone(), val);
-                        }
-                        new_rec
-                    })
-                    .collect()
+                let mut projected = Vec::with_capacity(input_records.len());
+                for rec in &input_records {
+                    let mut new_rec = Record::new();
+                    for (i, item) in items.iter().enumerate() {
+                        let val = eval_with_params(&item.expression, rec, params, storage)?;
+                        new_rec.insert(columns[i].clone(), val);
+                    }
+                    projected.push(new_rec);
+                }
+                projected
             };
 
             if *distinct {
@@ -164,10 +165,18 @@ fn execute_to_records(
 
         LogicalPlan::Sort { input, items } => {
             let (cols, mut records) = execute_to_records(input, storage, params)?;
+            let mut sort_err: Option<CypherError> = None;
             records.sort_by(|a, b| {
+                if sort_err.is_some() { return std::cmp::Ordering::Equal; }
                 for item in items {
-                    let va = eval(&item.expression, a);
-                    let vb = eval(&item.expression, b);
+                    let va = match eval_with_params(&item.expression, a, params, storage) {
+                        Ok(v) => v,
+                        Err(e) => { sort_err = Some(e); return std::cmp::Ordering::Equal; }
+                    };
+                    let vb = match eval_with_params(&item.expression, b, params, storage) {
+                        Ok(v) => v,
+                        Err(e) => { sort_err = Some(e); return std::cmp::Ordering::Equal; }
+                    };
                     let ord = compare_values(&va, &vb).unwrap_or(std::cmp::Ordering::Equal);
                     let ord = if item.ascending { ord } else { ord.reverse() };
                     if ord != std::cmp::Ordering::Equal {
@@ -176,6 +185,7 @@ fn execute_to_records(
                 }
                 std::cmp::Ordering::Equal
             });
+            if let Some(e) = sort_err { return Err(e); }
             Ok((cols, records))
         }
 
@@ -183,7 +193,7 @@ fn execute_to_records(
             let (cols, records) = execute_to_records(input, storage, params)?;
             // SKIP/LIMIT count expressions must be parameter-only or literals;
             // evaluate them against an empty record as per openCypher spec.
-            let n = match eval(count, &Record::new()) {
+            let n = match eval_with_params(count, &Record::new(), params, storage)? {
                 CypherValue::Integer(i) => i.max(0) as usize,
                 _ => 0,
             };
@@ -193,7 +203,7 @@ fn execute_to_records(
 
         LogicalPlan::Limit { input, count } => {
             let (cols, records) = execute_to_records(input, storage, params)?;
-            let n = match eval(count, &Record::new()) {
+            let n = match eval_with_params(count, &Record::new(), params, storage)? {
                 CypherValue::Integer(i) => i.max(0) as usize,
                 _ => records.len(),
             };
@@ -266,10 +276,10 @@ fn execute_create_node(
 
     // Bind the created node variable if provided
     let var = pattern.variable.clone();
-    if let Some(ref v) = var {
-        if !cols.contains(v) {
-            cols.push(v.clone());
-        }
+    if let Some(ref v) = var
+        && !cols.contains(v)
+    {
+        cols.push(v.clone());
     }
 
     // For each input row, create one node and augment the record
@@ -300,15 +310,21 @@ fn execute_create_path(
 
     // Collect all variable names we will bind
     let start_var = start.variable.clone();
-    if let Some(ref v) = start_var {
-        if !cols.contains(v) { cols.push(v.clone()); }
+    if let Some(ref v) = start_var
+        && !cols.contains(v)
+    {
+        cols.push(v.clone());
     }
     for elem in elements {
-        if let Some(ref rv) = elem.relationship.variable {
-            if !cols.contains(rv) { cols.push(rv.clone()); }
+        if let Some(ref rv) = elem.relationship.variable
+            && !cols.contains(rv)
+        {
+            cols.push(rv.clone());
         }
-        if let Some(ref dv) = elem.node.variable {
-            if !cols.contains(dv) { cols.push(dv.clone()); }
+        if let Some(ref dv) = elem.node.variable
+            && !cols.contains(dv)
+        {
+            cols.push(dv.clone());
         }
     }
 
@@ -379,19 +395,18 @@ fn execute_with(
         .collect();
 
     let mut rows: Vec<Record> = if items_contain_aggregation(items) {
-        execute_aggregation(items, &input_records, &columns, params)
+        execute_aggregation(items, &input_records, &columns, params, storage)?
     } else {
-        input_records
-            .iter()
-            .map(|rec| {
-                let mut new_rec = Record::new();
-                for (i, item) in items.iter().enumerate() {
-                    let val = eval(&item.expression, rec);
-                    new_rec.insert(columns[i].clone(), val);
-                }
-                new_rec
-            })
-            .collect()
+        let mut projected = Vec::with_capacity(input_records.len());
+        for rec in &input_records {
+            let mut new_rec = Record::new();
+            for (i, item) in items.iter().enumerate() {
+                let val = eval_with_params(&item.expression, rec, params, storage)?;
+                new_rec.insert(columns[i].clone(), val);
+            }
+            projected.push(new_rec);
+        }
+        projected
     };
 
     if distinct {
@@ -406,7 +421,13 @@ fn execute_with(
 
     // Apply WHERE predicate if present
     if let Some(predicate) = where_predicate {
-        rows.retain(|rec| is_truthy(&eval(predicate, rec)));
+        let mut filtered = Vec::new();
+        for rec in rows {
+            if is_truthy(&eval_with_params(predicate, &rec, params, storage)?) {
+                filtered.push(rec);
+            }
+        }
+        rows = filtered;
     }
 
     Ok((columns, rows))
@@ -428,7 +449,7 @@ fn execute_unwind(
     let mut result_records = Vec::new();
 
     for rec in &input_records {
-        let list_val = eval(expression, rec);
+        let list_val = eval_with_params(expression, rec, params, storage)?;
         match list_val {
             CypherValue::List(items) => {
                 for item in items {
@@ -462,7 +483,7 @@ fn execute_set(
 
     for rec in &mut records {
         for item in items {
-            apply_set_item(item, rec, storage)?;
+            apply_set_item(item, rec, storage, params)?;
         }
     }
 
@@ -473,10 +494,11 @@ fn apply_set_item(
     item: &SetItem,
     rec: &mut Record,
     storage: &mut GraphStorage,
+    params: &Parameters,
 ) -> Result<(), CypherError> {
     match item {
         SetItem::Property { variable, property, expression } => {
-            let val = eval(expression, rec);
+            let val = eval_with_params(expression, rec, params, storage)?;
             // Setting a property to null removes it (openCypher spec).
             if matches!(val, CypherValue::Null) {
                 match rec.get(variable) {
@@ -519,7 +541,7 @@ fn apply_set_item(
             }
         }
         SetItem::AllProperties { variable, expression } => {
-            let val = eval(expression, rec);
+            let val = eval_with_params(expression, rec, params, storage)?;
             let props = cypher_value_to_property_map(&val)?;
 
             match rec.get(variable) {
@@ -539,7 +561,7 @@ fn apply_set_item(
             }
         }
         SetItem::MergeProperties { variable, expression } => {
-            let val = eval(expression, rec);
+            let val = eval_with_params(expression, rec, params, storage)?;
             let props = cypher_value_to_property_map(&val)?;
 
             match rec.get(variable) {
@@ -628,7 +650,7 @@ fn execute_delete(
 
     for rec in &records {
         for expr in expressions {
-            let val = eval(expr, rec);
+            let val = eval_with_params(expr, rec, params, storage)?;
             match val {
                 CypherValue::Node(n) => { node_ids.insert(n.id); }
                 CypherValue::Relationship(e) => { edge_ids.insert(e.id); }
@@ -704,7 +726,7 @@ fn execute_merge(
                     if let Some(items) = on_match {
                         for rec in &mut result_records {
                             for item in items {
-                                apply_set_item(item, rec, storage)?;
+                                apply_set_item(item, rec, storage, params)?;
                             }
                         }
                     }
@@ -719,7 +741,7 @@ fn execute_merge(
                     if let Some(items) = on_create {
                         for rec in &mut result_records {
                             for item in items {
-                                apply_set_item(item, rec, storage)?;
+                                apply_set_item(item, rec, storage, params)?;
                             }
                         }
                     }

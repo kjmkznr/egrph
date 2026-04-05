@@ -582,7 +582,7 @@ fn parse_pattern_element(
         let start = nodes.remove(0);
         let elements: Vec<PatternChainElement> = rels
             .into_iter()
-            .zip(nodes.into_iter())
+            .zip(nodes)
             .map(|(rel, node)| PatternChainElement {
                 relationship: rel,
                 node,
@@ -1094,7 +1094,9 @@ fn parse_postfix_expression(
     Ok(result)
 }
 
-fn parse_slice_range(pair: pest::iterators::Pair<Rule>) -> Result<(Option<Box<Expression>>, Option<Box<Expression>>), CypherError> {
+type SliceRange = (Option<Box<Expression>>, Option<Box<Expression>>);
+
+fn parse_slice_range(pair: pest::iterators::Pair<Rule>) -> Result<SliceRange, CypherError> {
     // The grammar is: slice_range = { expression? ~ dotdot ~ expression? }
     // We distinguish which expression appears before vs. after ".." by checking
     // byte offsets against the `dotdot` token, which the grammar now exposes as

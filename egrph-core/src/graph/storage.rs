@@ -202,15 +202,15 @@ impl GraphStorage {
 
             for eid in edge_ids {
                 if let Some(edge) = self.edges.remove(&eid) {
-                    if edge.src != id {
-                        if let Some(out) = self.outgoing.get_mut(&edge.src) {
-                            out.retain(|e| *e != eid);
-                        }
+                    if edge.src != id
+                        && let Some(out) = self.outgoing.get_mut(&edge.src)
+                    {
+                        out.retain(|e| *e != eid);
                     }
-                    if edge.dst != id {
-                        if let Some(inc) = self.incoming.get_mut(&edge.dst) {
-                            inc.retain(|e| *e != eid);
-                        }
+                    if edge.dst != id
+                        && let Some(inc) = self.incoming.get_mut(&edge.dst)
+                    {
+                        inc.retain(|e| *e != eid);
                     }
                 }
             }
