@@ -275,8 +275,31 @@ pub enum Expression {
         predicate: Option<Box<Expression>>,
         map_expr: Option<Box<Expression>>,
     },
+    /// Collection predicate: any/all/none/single(variable IN list WHERE predicate)
+    FilterPredicate {
+        kind: FilterPredicateKind,
+        variable: String,
+        list: Box<Expression>,
+        predicate: Box<Expression>,
+    },
+    /// Reduce: reduce(accumulator = init, variable IN list | body)
+    Reduce {
+        accumulator: String,
+        init: Box<Expression>,
+        variable: String,
+        list: Box<Expression>,
+        body: Box<Expression>,
+    },
     /// Parameter reference: $param
     Parameter(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum FilterPredicateKind {
+    Any,
+    All,
+    None,
+    Single,
 }
 
 #[derive(Debug, Clone)]

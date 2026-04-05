@@ -160,6 +160,8 @@ contains_kw    = @{ ^"CONTAINS" ~ !ASCII_ALPHANUMERIC }
 atom = {
     case_expression
   | list_comprehension
+  | filter_predicate
+  | reduce_expression
   | literal
   | parameter
   | function_invocation
@@ -182,6 +184,16 @@ list_comprehension = {
 }
 where_kw = { ^"WHERE" }
 pipe_op = { "|" }
+
+// --- Collection predicate functions ---
+// any/all/none/single(variable IN expression WHERE expression)
+filter_predicate = { filter_pred_kw ~ "(" ~ variable ~ in_kw ~ expression ~ where_kw ~ expression ~ ")" }
+filter_pred_kw = @{ (^"ANY" | ^"ALL" | ^"NONE" | ^"SINGLE") ~ !ASCII_ALPHANUMERIC }
+
+// --- Reduce expression ---
+// reduce(accumulator = init, variable IN list | expr)
+reduce_expression = { reduce_kw ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ variable ~ in_kw ~ expression ~ pipe_op ~ expression ~ ")" }
+reduce_kw = @{ ^"REDUCE" ~ !ASCII_ALPHANUMERIC }
 
 // --- Parameter ---
 parameter = { "$" ~ IDENTIFIER }
@@ -210,7 +222,14 @@ map_entry = { property_key ~ ":" ~ expression }
 
 // --- Identifiers ---
 variable = { IDENTIFIER }
-IDENTIFIER = @{ !(reserved_word ~ !ASCII_ALPHANUMERIC) ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+// Identifiers may not:
+//  - be a reserved keyword (word-boundary check)
+//  - start with two underscores (__ prefix is reserved for internal planner functions)
+IDENTIFIER = @{
+    !(reserved_word ~ !ASCII_ALPHANUMERIC)
+    ~ !("__")
+    ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
+}
 
 reserved_word = {
     ^"MATCH" | ^"OPTIONAL" | ^"CREATE" | ^"RETURN" | ^"WHERE"
@@ -221,4 +240,5 @@ reserved_word = {
   | ^"CASE" | ^"WHEN" | ^"THEN" | ^"ELSE" | ^"END"
   | ^"WITH" | ^"UNWIND" | ^"SET" | ^"REMOVE" | ^"DELETE" | ^"DETACH"
   | ^"MERGE" | ^"ON"
+  | ^"REDUCE" | ^"ANY" | ^"ALL" | ^"NONE" | ^"SINGLE"
 }

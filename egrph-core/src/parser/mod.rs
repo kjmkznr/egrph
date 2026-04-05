@@ -1148,6 +1148,8 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
     match inner.as_rule() {
         Rule::case_expression => parse_case_expression(inner),
         Rule::list_comprehension => parse_list_comprehension(inner),
+        Rule::filter_predicate => parse_filter_predicate(inner),
+        Rule::reduce_expression => parse_reduce_expression(inner),
         Rule::literal => parse_literal(inner),
         Rule::parameter => parse_parameter(inner),
         Rule::function_invocation => parse_function_invocation(inner),
@@ -1162,6 +1164,106 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
             inner.as_rule()
         ))),
     }
+}
+
+fn parse_filter_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
+    // filter_pred_kw ~ "(" ~ variable ~ in_kw ~ expression ~ where_kw ~ expression ~ ")"
+    let mut kind_str = String::new();
+    let mut variable = String::new();
+    let mut list_expr = None;
+    let mut predicate_expr = None;
+
+    enum Section { List, Predicate }
+    let mut section = Section::List;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::filter_pred_kw => {
+                kind_str = inner.as_str().to_lowercase();
+            }
+            Rule::variable => {
+                variable = inner.as_str().to_string();
+            }
+            Rule::in_kw => {
+                section = Section::List;
+            }
+            Rule::where_kw => {
+                section = Section::Predicate;
+            }
+            Rule::expression => {
+                let expr = parse_expression(inner)?;
+                match section {
+                    Section::List => { list_expr = Some(expr); }
+                    Section::Predicate => { predicate_expr = Some(expr); }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let kind = match kind_str.as_str() {
+        "any" => FilterPredicateKind::Any,
+        "all" => FilterPredicateKind::All,
+        "none" => FilterPredicateKind::None,
+        "single" => FilterPredicateKind::Single,
+        _ => return Err(CypherError::ParseError(format!("Unknown filter predicate: {}", kind_str))),
+    };
+
+    Ok(Expression::FilterPredicate {
+        kind,
+        variable,
+        list: Box::new(list_expr.ok_or_else(|| {
+            CypherError::ParseError("Missing list in filter predicate".to_string())
+        })?),
+        predicate: Box::new(predicate_expr.ok_or_else(|| {
+            CypherError::ParseError("Missing predicate in filter predicate".to_string())
+        })?),
+    })
+}
+
+fn parse_reduce_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
+    // reduce_kw ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ variable ~ in_kw ~ expression ~ pipe_op ~ expression ~ ")"
+    let mut variables: Vec<String> = Vec::new();
+    let mut expressions: Vec<Expression> = Vec::new();
+
+    enum ExprSection { Init, List, Body }
+    let mut section = ExprSection::Init;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::reduce_kw => {}
+            Rule::variable => {
+                variables.push(inner.as_str().to_string());
+            }
+            Rule::in_kw => {
+                section = ExprSection::List;
+            }
+            Rule::pipe_op => {
+                section = ExprSection::Body;
+            }
+            Rule::expression => {
+                let expr = parse_expression(inner)?;
+                match section {
+                    ExprSection::Init => { expressions.push(expr); }
+                    ExprSection::List => { expressions.push(expr); }
+                    ExprSection::Body => { expressions.push(expr); }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if variables.len() < 2 || expressions.len() < 3 {
+        return Err(CypherError::ParseError("Invalid reduce expression".to_string()));
+    }
+
+    Ok(Expression::Reduce {
+        accumulator: variables[0].clone(),
+        init: Box::new(expressions[0].clone()),
+        variable: variables[1].clone(),
+        list: Box::new(expressions[1].clone()),
+        body: Box::new(expressions[2].clone()),
+    })
 }
 
 fn parse_case_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {

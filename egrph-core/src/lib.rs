@@ -1072,4 +1072,204 @@ mod tests {
         ).unwrap();
         assert_eq!(result.rows.len(), 2);
     }
+
+    // --- TCK Compliance Tests ---
+
+    // Issue 3: 複数ラベルフィルター
+    #[test]
+    fn test_multi_label_filter() {
+        let mut g = Graph::new();
+        // ノードを3つ作成: A:B, A, B
+        g.execute("CREATE (:A:B {name: \"both\"})").unwrap();
+        g.execute("CREATE (:A {name: \"only_a\"})").unwrap();
+        g.execute("CREATE (:B {name: \"only_b\"})").unwrap();
+
+        // MATCH (n:A:B) は A と B の両方を持つノードのみを返す
+        let result = g.execute("MATCH (n:A:B) RETURN n.name").unwrap();
+        assert_eq!(result.rows.len(), 1, "MATCH (n:A:B) should return only nodes with both labels");
+        assert_eq!(result.rows[0].values[0], CypherValue::String("both".to_string()));
+    }
+
+    // Issue 4 & 6: toString() の型チェックと Float 表現
+    #[test]
+    fn test_tostring_scalar_types() {
+        let mut g = Graph::new();
+
+        // Integer
+        let r = g.execute("RETURN toString(42)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::String("42".to_string()));
+
+        // Float: 整数値のFloatは小数点付きで返される
+        let r = g.execute("RETURN toString(1.0)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::String("1.0".to_string()));
+
+        // Boolean
+        let r = g.execute("RETURN toString(true)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::String("true".to_string()));
+
+        // Null → Null
+        let r = g.execute("RETURN toString(null)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Null);
+
+        // List → Null (openCypher: TypeError)
+        let r = g.execute("RETURN toString([1,2,3])").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Null);
+    }
+
+    // Issue 5: 述語関数
+    #[test]
+    fn test_any_predicate() {
+        let mut g = Graph::new();
+
+        let r = g.execute("RETURN any(x IN [1, 2, 3] WHERE x > 2)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+
+        let r = g.execute("RETURN any(x IN [1, 2, 3] WHERE x > 10)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
+
+        // 空リスト → false
+        let r = g.execute("RETURN any(x IN [] WHERE x > 0)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
+    }
+
+    #[test]
+    fn test_all_predicate() {
+        let mut g = Graph::new();
+
+        let r = g.execute("RETURN all(x IN [2, 3, 4] WHERE x > 1)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+
+        let r = g.execute("RETURN all(x IN [1, 2, 3] WHERE x > 1)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
+
+        // 空リスト → true (vacuous truth)
+        let r = g.execute("RETURN all(x IN [] WHERE x > 0)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+    }
+
+    #[test]
+    fn test_none_predicate() {
+        let mut g = Graph::new();
+
+        let r = g.execute("RETURN none(x IN [1, 2, 3] WHERE x > 10)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+
+        let r = g.execute("RETURN none(x IN [1, 2, 3] WHERE x > 2)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
+    }
+
+    #[test]
+    fn test_single_predicate() {
+        let mut g = Graph::new();
+
+        let r = g.execute("RETURN single(x IN [1, 2, 3] WHERE x = 2)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+
+        let r = g.execute("RETURN single(x IN [1, 2, 3] WHERE x > 1)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
+    }
+
+    #[test]
+    fn test_reduce_expression() {
+        let mut g = Graph::new();
+
+        // reduce(s = 0, x IN [1, 2, 3] | s + x) = 6
+        let r = g.execute("RETURN reduce(s = 0, x IN [1, 2, 3] | s + x)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Integer(6));
+
+        // reduce(s = \"\", x IN [\"a\", \"b\", \"c\"] | s + x) = \"abc\"
+        let r = g.execute("RETURN reduce(s = \"\", x IN [\"a\", \"b\", \"c\"] | s + x)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::String("abc".to_string()));
+    }
+
+    // Issue 1: OPTIONAL MATCH
+    #[test]
+    fn test_optional_match_no_match() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
+
+        // AliceにはKNOWSリレーションシップがないので r と b は NULL になる
+        let result = g.execute(
+            "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a.name, r, b"
+        ).unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
+        assert_eq!(result.rows[0].values[1], CypherValue::Null);
+        assert_eq!(result.rows[0].values[2], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_optional_match_with_match() {
+        let mut g = Graph::new();
+        g.execute(
+            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
+        ).unwrap();
+
+        // AliceはBobを知っているので結果が返る
+        let result = g.execute(
+            "MATCH (a:Person {name: \"Alice\"}) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a.name, b.name"
+        ).unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
+        assert_eq!(result.rows[0].values[1], CypherValue::String("Bob".to_string()));
+    }
+
+    #[test]
+    fn test_optional_match_mixed() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
+        g.execute(
+            "CREATE (c:Person {name: \"Charlie\"})-[:KNOWS]->(d:Person {name: \"Dave\"})"
+        ).unwrap();
+
+        // AliceはKNOWSなし(NULL)、CharlieはDaveを知っている
+        let result = g.execute(
+            "MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name ORDER BY a.name"
+        ).unwrap();
+
+        assert_eq!(result.rows.len(), 3); // Alice(null), Charlie(Dave), Dave(null)
+        // Charlie → Dave のペアが含まれているか確認
+        let charlie_row = result.rows.iter()
+            .find(|r| r.values[0] == CypherValue::String("Charlie".to_string()));
+        assert!(charlie_row.is_some());
+        assert_eq!(charlie_row.unwrap().values[1], CypherValue::String("Dave".to_string()));
+    }
+
+    // Issue 2: 可変長リレーションシップ
+    #[test]
+    fn test_var_length_exact_hops() {
+        let mut g = Graph::new();
+        // A -> B -> C -> D のチェーンを作成
+        g.execute(
+            "CREATE (a:Node {name: \"A\"})-[:NEXT]->(b:Node {name: \"B\"})-[:NEXT]->(c:Node {name: \"C\"})-[:NEXT]->(d:Node {name: \"D\"})"
+        ).unwrap();
+
+        // 1ホップ
+        let r = g.execute("MATCH (a:Node {name: \"A\"})-[*1..1]->(b) RETURN b.name").unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0].values[0], CypherValue::String("B".to_string()));
+
+        // 2ホップ
+        let r = g.execute("MATCH (a:Node {name: \"A\"})-[*2..2]->(b) RETURN b.name").unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0].values[0], CypherValue::String("C".to_string()));
+
+        // 1〜2ホップ
+        let r = g.execute("MATCH (a:Node {name: \"A\"})-[*1..2]->(b) RETURN b.name ORDER BY b.name").unwrap();
+        assert_eq!(r.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_var_length_unbounded() {
+        let mut g = Graph::new();
+        g.execute(
+            "CREATE (a:VNode {name: \"A\"})-[:EDGE]->(b:VNode {name: \"B\"})-[:EDGE]->(c:VNode {name: \"C\"})"
+        ).unwrap();
+
+        // A から到達可能な全ノード (*1以上)
+        let r = g.execute("MATCH (a:VNode {name: \"A\"})-[*]->(b) RETURN b.name ORDER BY b.name").unwrap();
+        assert_eq!(r.rows.len(), 2); // B と C
+    }
 }

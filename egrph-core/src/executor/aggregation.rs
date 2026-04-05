@@ -60,6 +60,14 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
                 || map_expr.as_ref().map(|m| expr_contains_aggregation(m)).unwrap_or(false)
         }
         Expression::Literal(_) | Expression::Variable(_) | Expression::Parameter(_) => false,
+        Expression::FilterPredicate { list, predicate, .. } => {
+            expr_contains_aggregation(list) || expr_contains_aggregation(predicate)
+        }
+        Expression::Reduce { init, list, body, .. } => {
+            expr_contains_aggregation(init)
+                || expr_contains_aggregation(list)
+                || expr_contains_aggregation(body)
+        }
     }
 }
 
@@ -165,7 +173,7 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 "sum" => {
                     if let Some(arg) = args.first() {
                         let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
-                        sum_values(&vals)
+                        return sum_values(&vals);
                     } else {
                         CypherValue::Integer(0)
                     }
@@ -221,7 +229,9 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 "percentilecont" | "percentiledisc" => {
                     if args.len() >= 2 {
                         let vals = collect_non_null_values(&args[0], records, params, false, storage)?;
-                        let percentile_val = eval_with_params(&args[1], records.first().copied().unwrap_or(&Record::new()), params, storage)?;
+                        // The percentile argument is a constant/parameter, not row-dependent;
+                        // evaluate it against an empty record to avoid accidental row coupling.
+                        let percentile_val = eval_with_params(&args[1], &Record::new(), params, storage)?;
                         if let CypherValue::Float(p) = percentile_val {
                             if lower == "percentilecont" {
                                 percentile_cont(&vals, p)
@@ -285,34 +295,35 @@ fn to_f64(v: &CypherValue) -> Option<f64> {
     }
 }
 
-fn sum_values(vals: &[CypherValue]) -> CypherValue {
+fn sum_values(vals: &[CypherValue]) -> Result<CypherValue, CypherError> {
     if vals.is_empty() {
-        return CypherValue::Integer(0);
+        return Ok(CypherValue::Integer(0));
     }
     let all_int = vals.iter().all(|v| matches!(v, CypherValue::Integer(_)));
     if all_int {
         let mut acc: i64 = 0;
         for v in vals {
             if let CypherValue::Integer(i) = v {
-                match acc.checked_add(*i) {
-                    Some(next) => acc = next,
-                    None => return CypherValue::Null, // overflow
-                }
+                acc = acc.checked_add(*i)
+                    .ok_or_else(|| CypherError::RuntimeError(
+                        "Integer overflow in SUM".to_string()
+                    ))?;
             }
         }
-        CypherValue::Integer(acc)
+        Ok(CypherValue::Integer(acc))
     } else {
         let s: f64 = vals.iter().filter_map(to_f64).sum();
-        CypherValue::Float(s)
+        Ok(CypherValue::Float(s))
     }
 }
 
 fn avg_values(vals: &[CypherValue]) -> CypherValue {
-    if vals.is_empty() {
+    // Only numeric values participate in avg; non-numeric non-null values are ignored.
+    let floats: Vec<f64> = vals.iter().filter_map(to_f64).collect();
+    if floats.is_empty() {
         return CypherValue::Null;
     }
-    let sum: f64 = vals.iter().filter_map(to_f64).sum();
-    CypherValue::Float(sum / vals.len() as f64)
+    CypherValue::Float(floats.iter().sum::<f64>() / floats.len() as f64)
 }
 
 fn min_value(vals: &[CypherValue]) -> CypherValue {

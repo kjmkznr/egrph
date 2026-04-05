@@ -257,33 +257,36 @@ impl GraphStorage {
     /// set to O(|matching nodes|). When `labels` is empty **all** nodes are
     /// scanned in O(|nodes|) — avoid calling with an empty label list on large graphs.
     pub fn find_node(&self, labels: &[String], properties: &HashMap<String, PropertyValue>) -> Option<NodeId> {
+        self.find_nodes(labels, properties).into_iter().next()
+    }
+
+    /// Return **all** node IDs that match the given labels and properties.
+    ///
+    /// MERGE needs this to apply ON MATCH to every existing matching node, not just the first.
+    pub fn find_nodes(&self, labels: &[String], properties: &HashMap<String, PropertyValue>) -> Vec<NodeId> {
         // Use the label index to narrow candidates when labels are present
-        let candidates: Box<dyn Iterator<Item = &NodeId>> = if let Some(first_label) = labels.first() {
+        let candidates: Vec<NodeId> = if let Some(first_label) = labels.first() {
             match self.label_index.get(first_label) {
-                Some(ids) => Box::new(ids.iter()),
-                None => return None,
+                Some(ids) => ids.iter().copied().collect(),
+                None => return Vec::new(),
             }
         } else {
-            Box::new(self.nodes.keys())
+            self.nodes.keys().copied().collect()
         };
 
-        for id in candidates {
+        candidates.into_iter().filter(|id| {
             let node = match self.nodes.get(id) {
                 Some(n) => n,
-                None => continue,
+                None => return false,
             };
             let labels_match = labels.iter().all(|l| node.labels.contains(l));
             if !labels_match {
-                continue;
+                return false;
             }
-            let props_match = properties.iter().all(|(key, val)| {
+            properties.iter().all(|(key, val)| {
                 node.properties.get(key).map(|v| property_values_equal(v, val)).unwrap_or(false)
-            });
-            if props_match {
-                return Some(*id);
-            }
-        }
-        None
+            })
+        }).collect()
     }
 
     /// Replace all properties on an edge.

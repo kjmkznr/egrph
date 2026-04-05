@@ -126,22 +126,33 @@ fn execute_to_records(
         }
 
         LogicalPlan::Return { input, items, distinct } => {
-            let (_input_cols, input_records) = execute_to_records(input, storage, params)?;
+            let (input_cols, input_records) = execute_to_records(input, storage, params)?;
 
-            let columns: Vec<String> = items
+            // Expand RETURN * into all columns visible from the input plan.
+            let effective_items: Vec<ReturnItem> =
+                if items.len() == 1 && matches!(&items[0].expression, Expression::Variable(v) if v == "*") {
+                    input_cols.iter().map(|col| ReturnItem {
+                        expression: Expression::Variable(col.clone()),
+                        alias: None,
+                    }).collect()
+                } else {
+                    items.to_vec()
+                };
+
+            let columns: Vec<String> = effective_items
                 .iter()
                 .map(|item| {
                     item.alias.clone().unwrap_or_else(|| expr_to_column_name(&item.expression))
                 })
                 .collect();
 
-            let mut rows: Vec<Record> = if items_contain_aggregation(items) {
-                execute_aggregation(items, &input_records, &columns, params, storage)?
+            let mut rows: Vec<Record> = if items_contain_aggregation(&effective_items) {
+                execute_aggregation(&effective_items, &input_records, &columns, params, storage)?
             } else {
                 let mut projected = Vec::with_capacity(input_records.len());
                 for rec in &input_records {
                     let mut new_rec = Record::new();
-                    for (i, item) in items.iter().enumerate() {
+                    for (i, item) in effective_items.iter().enumerate() {
                         let val = eval_with_params(&item.expression, rec, params, storage)?;
                         new_rec.insert(columns[i].clone(), val);
                     }
@@ -155,7 +166,7 @@ fn execute_to_records(
                 rows.retain(|rec| {
                     let key = columns.iter().map(|c| {
                         cypher_value_to_stable_key(rec.get(c).unwrap_or(&CypherValue::Null))
-                    }).collect::<Vec<_>>().join(",");
+                    }).collect::<Vec<_>>().join("\x00");
                     seen.insert(key)
                 });
             }
@@ -194,8 +205,13 @@ fn execute_to_records(
             // SKIP/LIMIT count expressions must be parameter-only or literals;
             // evaluate them against an empty record as per openCypher spec.
             let n = match eval_with_params(count, &Record::new(), params, storage)? {
-                CypherValue::Integer(i) => i.max(0) as usize,
-                _ => 0,
+                CypherValue::Integer(i) if i >= 0 => i as usize,
+                CypherValue::Integer(i) => return Err(CypherError::TypeError(
+                    format!("SKIP requires a non-negative integer, got {}", i)
+                )),
+                other => return Err(CypherError::TypeError(
+                    format!("SKIP requires an integer expression, got {}", cypher_value_type_name(&other))
+                )),
             };
             let skipped: Vec<Record> = records.into_iter().skip(n).collect();
             Ok((cols, skipped))
@@ -204,8 +220,13 @@ fn execute_to_records(
         LogicalPlan::Limit { input, count } => {
             let (cols, records) = execute_to_records(input, storage, params)?;
             let n = match eval_with_params(count, &Record::new(), params, storage)? {
-                CypherValue::Integer(i) => i.max(0) as usize,
-                _ => records.len(),
+                CypherValue::Integer(i) if i >= 0 => i as usize,
+                CypherValue::Integer(i) => return Err(CypherError::TypeError(
+                    format!("LIMIT requires a non-negative integer, got {}", i)
+                )),
+                other => return Err(CypherError::TypeError(
+                    format!("LIMIT requires an integer expression, got {}", cypher_value_type_name(&other))
+                )),
             };
             let limited: Vec<Record> = records.into_iter().take(n).collect();
             Ok((cols, limited))
@@ -261,6 +282,75 @@ fn execute_to_records(
 
             Ok((cols, result))
         }
+
+        LogicalPlan::LeftOuterJoin { left, right } => {
+            let (left_cols, left_records) = execute_to_records(left, storage, params)?;
+            let (right_cols, right_records) = execute_to_records(right, storage, params)?;
+
+            // Shared variables: used as join conditions
+            let shared_vars: Vec<String> = left_cols.iter()
+                .filter(|c| right_cols.contains(c))
+                .cloned()
+                .collect();
+
+            // Right-only variables: set to NULL when no right row matches
+            let right_only_vars: Vec<String> = right_cols.iter()
+                .filter(|c| !left_cols.contains(c))
+                .cloned()
+                .collect();
+
+            let mut cols = left_cols.clone();
+            for c in &right_only_vars {
+                cols.push(c.clone());
+            }
+
+            let mut result = Vec::new();
+            for left_rec in &left_records {
+                let matching_right: Vec<&Record> = right_records.iter()
+                    .filter(|rr| {
+                        shared_vars.iter().all(|sv| {
+                            let lv = cypher_value_to_stable_key(
+                                left_rec.get(sv.as_str()).unwrap_or(&CypherValue::Null)
+                            );
+                            let rv = cypher_value_to_stable_key(
+                                rr.get(sv.as_str()).unwrap_or(&CypherValue::Null)
+                            );
+                            lv == rv
+                        })
+                    })
+                    .collect();
+
+                if matching_right.is_empty() {
+                    // No matching right rows: emit left row with right-only vars as NULL
+                    let mut merged = left_rec.clone();
+                    for v in &right_only_vars {
+                        merged.insert(v.clone(), CypherValue::Null);
+                    }
+                    result.push(merged);
+                } else {
+                    // Matching right rows found: emit one combined row per match
+                    for right_rec in matching_right {
+                        let mut merged = left_rec.clone();
+                        for v in &right_only_vars {
+                            let val = right_rec.get(v.as_str()).cloned().unwrap_or(CypherValue::Null);
+                            merged.insert(v.clone(), val);
+                        }
+                        result.push(merged);
+                    }
+                }
+            }
+
+            Ok((cols, result))
+        }
+
+        LogicalPlan::VarLengthExpand {
+            input, src_variable, rel_variable, dst_variable, rel_types, direction, min_hops, max_hops,
+        } => {
+            execute_var_length_expand(
+                input, src_variable, rel_variable.as_deref(), dst_variable,
+                rel_types, direction, *min_hops, *max_hops, storage, params,
+            )
+        }
     }
 }
 
@@ -287,10 +377,12 @@ fn execute_create_node(
     let mut result = Vec::with_capacity(base_records.len());
     for mut rec in base_records {
         let labels = pattern.labels.clone();
-        let properties = resolve_map_literal_to_properties(&pattern.properties)?;
+        let properties = resolve_map_literal_to_properties(&pattern.properties, params)?;
         let id = storage.create_node(labels, properties);
         if let Some(ref v) = var {
-            let node = storage.get_node(id).unwrap().clone();
+            let node = storage.get_node(id)
+                .ok_or_else(|| CypherError::RuntimeError("Newly created node not found".to_string()))?
+                .clone();
             rec.insert(v.clone(), CypherValue::Node(node));
         }
         result.push(rec);
@@ -333,21 +425,23 @@ fn execute_create_path(
 
     for mut rec in base_records {
         let start_labels = start.labels.clone();
-        let start_props = resolve_map_literal_to_properties(&start.properties)?;
+        let start_props = resolve_map_literal_to_properties(&start.properties, params)?;
         let start_id = storage.create_node(start_labels, start_props);
         if let Some(ref v) = start_var {
-            let node = storage.get_node(start_id).unwrap().clone();
+            let node = storage.get_node(start_id)
+                .ok_or_else(|| CypherError::RuntimeError("Newly created node not found".to_string()))?
+                .clone();
             rec.insert(v.clone(), CypherValue::Node(node));
         }
 
         let mut prev_id = start_id;
         for elem in elements {
             let dst_labels = elem.node.labels.clone();
-            let dst_props = resolve_map_literal_to_properties(&elem.node.properties)?;
+            let dst_props = resolve_map_literal_to_properties(&elem.node.properties, params)?;
             let dst_id = storage.create_node(dst_labels, dst_props);
 
             let edge_label = elem.relationship.rel_types.first().cloned().unwrap_or_default();
-            let edge_props = resolve_map_literal_to_properties(&elem.relationship.properties)?;
+            let edge_props = resolve_map_literal_to_properties(&elem.relationship.properties, params)?;
 
             let (src, dst) = match elem.relationship.direction {
                 Direction::Incoming => (dst_id, prev_id),
@@ -358,11 +452,15 @@ fn execute_create_path(
                 .map_err(CypherError::RuntimeError)?;
 
             if let Some(ref rv) = elem.relationship.variable {
-                let edge = storage.get_edge(eid).unwrap().clone();
+                let edge = storage.get_edge(eid)
+                    .ok_or_else(|| CypherError::RuntimeError("Newly created edge not found".to_string()))?
+                    .clone();
                 rec.insert(rv.clone(), CypherValue::Relationship(edge));
             }
             if let Some(ref dv) = elem.node.variable {
-                let node = storage.get_node(dst_id).unwrap().clone();
+                let node = storage.get_node(dst_id)
+                    .ok_or_else(|| CypherError::RuntimeError("Newly created node not found".to_string()))?
+                    .clone();
                 rec.insert(dv.clone(), CypherValue::Node(node));
             }
 
@@ -414,7 +512,7 @@ fn execute_with(
         rows.retain(|rec| {
             let key = columns.iter().map(|c| {
                 cypher_value_to_stable_key(rec.get(c).unwrap_or(&CypherValue::Null))
-            }).collect::<Vec<_>>().join(",");
+            }).collect::<Vec<_>>().join("\x00");
             seen.insert(key)
         });
     }
@@ -459,13 +557,14 @@ fn execute_unwind(
                 }
             }
             CypherValue::Null => {
-                // UNWIND null produces no rows
+                // UNWIND null produces no rows (openCypher spec)
             }
-            _ => {
-                // UNWIND on a non-list value: treat as single-element
-                let mut new_rec = rec.clone();
-                new_rec.insert(alias.to_string(), list_val);
-                result_records.push(new_rec);
+            other => {
+                // UNWIND on a non-list scalar is a TypeError per openCypher spec
+                return Err(CypherError::TypeError(format!(
+                    "Type mismatch: expected List but was {}",
+                    cypher_value_type_name(&other)
+                )));
             }
         }
     }
@@ -705,44 +804,54 @@ fn execute_merge(
             }
 
             let labels = np.labels.clone();
-            let properties = resolve_map_literal_to_properties(&np.properties)?;
+            let properties = resolve_map_literal_to_properties(&np.properties, params)?;
 
-            // Try to find existing node
-            let existing = storage.find_node(&labels, &properties);
+            // Find all existing nodes matching labels and properties.
+            // MERGE runs ON MATCH for every matching node (not just the first),
+            // and ON CREATE only when no match exists at all.
+            let existing_ids = storage.find_nodes(&labels, &properties);
 
-            let mut result_records = if input_records.is_empty() {
+            let base_records = if input_records.is_empty() {
                 vec![Record::new()]
             } else {
                 input_records
             };
 
-            match existing {
-                Some(node_id) => {
-                    // Found - apply ON MATCH SET if present
-                    let node = storage.get_node(node_id).unwrap().clone();
+            let mut result_records = Vec::new();
+
+            if existing_ids.is_empty() {
+                // Not found — create one node and apply ON CREATE SET
+                let node_id = storage.create_node(labels, properties);
+                let node = storage.get_node(node_id)
+                    .ok_or_else(|| CypherError::RuntimeError("Newly created node not found".to_string()))?
+                    .clone();
+                for mut rec in base_records {
+                    rec.insert(variable.clone(), CypherValue::Node(node.clone()));
+                    result_records.push(rec);
+                }
+                if let Some(items) = on_create {
                     for rec in &mut result_records {
-                        rec.insert(variable.clone(), CypherValue::Node(node.clone()));
-                    }
-                    if let Some(items) = on_match {
-                        for rec in &mut result_records {
-                            for item in items {
-                                apply_set_item(item, rec, storage, params)?;
-                            }
+                        for item in items {
+                            apply_set_item(item, rec, storage, params)?;
                         }
                     }
                 }
-                None => {
-                    // Not found - create and apply ON CREATE SET if present
-                    let node_id = storage.create_node(labels, properties);
-                    let node = storage.get_node(node_id).unwrap().clone();
-                    for rec in &mut result_records {
+            } else {
+                // Found — produce one output row per matched node and apply ON MATCH SET
+                for node_id in existing_ids {
+                    let node = storage.get_node(node_id)
+                        .ok_or_else(|| CypherError::RuntimeError("Merged node not found".to_string()))?
+                        .clone();
+                    for base_rec in &base_records {
+                        let mut rec = base_rec.clone();
                         rec.insert(variable.clone(), CypherValue::Node(node.clone()));
+                        result_records.push(rec);
                     }
-                    if let Some(items) = on_create {
-                        for rec in &mut result_records {
-                            for item in items {
-                                apply_set_item(item, rec, storage, params)?;
-                            }
+                }
+                if let Some(items) = on_match {
+                    for rec in &mut result_records {
+                        for item in items {
+                            apply_set_item(item, rec, storage, params)?;
                         }
                     }
                 }
@@ -759,6 +868,116 @@ fn execute_merge(
             ))
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_var_length_expand(
+    input: &LogicalPlan,
+    src_variable: &str,
+    rel_variable: Option<&str>,
+    dst_variable: &str,
+    rel_types: &[String],
+    direction: &Direction,
+    min_hops: u64,
+    max_hops: Option<u64>,
+    storage: &mut GraphStorage,
+    params: &Parameters,
+) -> Result<(Vec<String>, Vec<Record>), CypherError> {
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
+
+    if let Some(rv) = rel_variable
+        && !cols.contains(&rv.to_string())
+    {
+        cols.push(rv.to_string());
+    }
+    if !cols.contains(&dst_variable.to_string()) {
+        cols.push(dst_variable.to_string());
+    }
+
+    // Hard ceiling to prevent runaway BFS on unbounded patterns (`-[*]->`).
+    // Bounded patterns (`-[*..N]->`) use the user-specified max directly.
+    const BFS_DEFAULT_MAX_HOPS: u64 = 100;
+    let effective_max = max_hops.unwrap_or(BFS_DEFAULT_MAX_HOPS);
+    let mut result_records = Vec::new();
+
+    for rec in &input_records {
+        let start_id = match rec.get(src_variable) {
+            Some(CypherValue::Node(n)) => n.id,
+            _ => continue,
+        };
+
+        // BFS state: (current_node_id, path_of_edges_taken)
+        // We avoid revisiting the same edge within a single path to prevent infinite loops.
+        let mut queue: std::collections::VecDeque<(NodeId, Vec<Edge>)> = std::collections::VecDeque::new();
+        queue.push_back((start_id, Vec::new()));
+
+        while let Some((cur_id, path_edges)) = queue.pop_front() {
+            let depth = path_edges.len() as u64;
+
+            if depth >= effective_max {
+                continue;
+            }
+
+            let next_edges: Vec<Edge> = match direction {
+                Direction::Outgoing => storage.outgoing_edges(cur_id).into_iter().cloned().collect(),
+                Direction::Incoming => storage.incoming_edges(cur_id).into_iter().cloned().collect(),
+                Direction::Undirected => {
+                    let mut all: Vec<Edge> = storage.outgoing_edges(cur_id).into_iter().cloned().collect();
+                    all.extend(storage.incoming_edges(cur_id).into_iter().cloned());
+                    all
+                }
+            };
+
+            for edge in next_edges {
+                // Skip edges already in the path (no repeated relationships)
+                if path_edges.iter().any(|pe| pe.id == edge.id) {
+                    continue;
+                }
+
+                // Apply relationship type filter
+                if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
+                    continue;
+                }
+
+                let next_id = match direction {
+                    Direction::Outgoing => edge.dst,
+                    Direction::Incoming => edge.src,
+                    Direction::Undirected => {
+                        if edge.src == cur_id { edge.dst } else { edge.src }
+                    }
+                };
+
+                let mut new_path = path_edges.clone();
+                new_path.push(edge.clone());
+                let new_depth = new_path.len() as u64;
+
+                // Emit a result row when depth is within [min_hops, max_hops]
+                if new_depth >= min_hops
+                    && let Some(dst_node) = storage.get_node(next_id)
+                {
+                    let mut new_rec = rec.clone();
+                    if let Some(rv) = rel_variable {
+                        // Bind the relationship variable to the list of traversed edges
+                        new_rec.insert(
+                            rv.to_string(),
+                            CypherValue::List(
+                                new_path.iter().map(|e| CypherValue::Relationship(e.clone())).collect(),
+                            ),
+                        );
+                    }
+                    new_rec.insert(dst_variable.to_string(), CypherValue::Node(dst_node.clone()));
+                    result_records.push(new_rec);
+                }
+
+                // Continue BFS if we haven't hit the maximum depth
+                if new_depth < effective_max {
+                    queue.push_back((next_id, new_path));
+                }
+            }
+        }
+    }
+
+    Ok((cols, result_records))
 }
 
 /// Convert a CypherValue to a PropertyValue for storage.
@@ -812,6 +1031,21 @@ fn records_to_query_result(columns: Vec<String>, records: Vec<Record>) -> QueryR
     QueryResult { columns, rows }
 }
 
+fn cypher_value_type_name(val: &CypherValue) -> &'static str {
+    match val {
+        CypherValue::Null => "Null",
+        CypherValue::Boolean(_) => "Boolean",
+        CypherValue::Integer(_) => "Integer",
+        CypherValue::Float(_) => "Float",
+        CypherValue::String(_) => "String",
+        CypherValue::List(_) => "List",
+        CypherValue::Map(_) => "Map",
+        CypherValue::Node(_) => "Node",
+        CypherValue::Relationship(_) => "Relationship",
+        CypherValue::Path(_) => "Path",
+    }
+}
+
 fn expr_to_column_name(expr: &Expression) -> String {
     match expr {
         Expression::Variable(name) => name.clone(),
@@ -825,23 +1059,27 @@ fn expr_to_column_name(expr: &Expression) -> String {
 
 fn resolve_map_literal_to_properties(
     map_lit: &Option<MapLiteral>,
+    params: &Parameters,
 ) -> Result<HashMap<String, PropertyValue>, CypherError> {
     let mut properties = HashMap::new();
     if let Some(map) = map_lit {
         for (key, expr) in &map.entries {
-            let value = expr_to_property_value(expr)?;
+            let value = expr_to_property_value(expr, params)?;
             properties.insert(key.clone(), value);
         }
     }
     Ok(properties)
 }
 
-fn expr_to_property_value(expr: &Expression) -> Result<PropertyValue, CypherError> {
+fn expr_to_property_value(expr: &Expression, params: &Parameters) -> Result<PropertyValue, CypherError> {
     match expr {
         Expression::Literal(Literal::String(s)) => Ok(PropertyValue::String(s.clone())),
         Expression::Literal(Literal::Integer(i)) => Ok(PropertyValue::Int(*i)),
         Expression::Literal(Literal::Float(f)) => Ok(PropertyValue::Float(*f)),
         Expression::Literal(Literal::Boolean(b)) => Ok(PropertyValue::Bool(*b)),
+        Expression::Literal(Literal::Null) => Err(CypherError::TypeError(
+            "Property value cannot be null".to_string(),
+        )),
         // Handle negative literals: -(integer) or -(float)
         Expression::UnaryOp { op: UnaryOp::Neg, operand } => {
             match operand.as_ref() {
@@ -850,6 +1088,21 @@ fn expr_to_property_value(expr: &Expression) -> Result<PropertyValue, CypherErro
                 _ => Err(CypherError::NotImplemented(
                     "Complex expressions in property values".to_string(),
                 ))
+            }
+        }
+        // Support $param references in inline property maps
+        Expression::Parameter(name) => {
+            match params.get(name) {
+                Some(CypherValue::String(s)) => Ok(PropertyValue::String(s.clone())),
+                Some(CypherValue::Integer(i)) => Ok(PropertyValue::Int(*i)),
+                Some(CypherValue::Float(f)) => Ok(PropertyValue::Float(*f)),
+                Some(CypherValue::Boolean(b)) => Ok(PropertyValue::Bool(*b)),
+                Some(_) => Err(CypherError::TypeError(
+                    format!("Parameter ${} must be a scalar value (String, Integer, Float, or Boolean)", name)
+                )),
+                None => Err(CypherError::RuntimeError(
+                    format!("Parameter ${} is not defined", name)
+                )),
             }
         }
         _ => {

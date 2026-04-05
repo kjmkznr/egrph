@@ -69,25 +69,35 @@ fn plan_match(match_clause: &MatchClause, input: LogicalPlan) -> Result<LogicalP
         return Err(CypherError::SemanticError("Empty MATCH pattern".to_string()));
     }
 
-    // Each comma-separated pattern part becomes a scan that is cross-joined with
-    // the accumulated plan so that all bindings remain visible.
+    // Each comma-separated pattern part becomes a scan that is combined with
+    // the accumulated plan. OPTIONAL MATCH uses LeftOuterJoin instead of CartesianProduct.
     let mut current = input;
-    for part in &match_clause.pattern.parts {
-        let scan_plan = plan_match_scan(part)?;
-        current = match current {
-            LogicalPlan::EmptyRow => scan_plan,
-            other => LogicalPlan::CartesianProduct {
-                left: Box::new(other),
+    for (part_idx, part) in match_clause.pattern.parts.iter().enumerate() {
+        let scan_plan = plan_match_scan(part, part_idx)?;
+        if match_clause.optional {
+            current = LogicalPlan::LeftOuterJoin {
+                left: Box::new(current),
                 right: Box::new(scan_plan),
-            },
-        };
+            };
+        } else {
+            current = match current {
+                LogicalPlan::EmptyRow => scan_plan,
+                other => LogicalPlan::CartesianProduct {
+                    left: Box::new(other),
+                    right: Box::new(scan_plan),
+                },
+            };
+        }
     }
 
     Ok(current)
 }
 
 /// Build the scan/expand plan for a single pattern part, without threading prior input.
-fn plan_match_scan(part: &crate::ast::PatternPart) -> Result<LogicalPlan, CypherError> {
+/// `part_idx` is the 0-based index of this part within the MATCH clause pattern list and
+/// is used to generate unique anonymous variable names so multiple anonymous nodes in the
+/// same clause do not collide on `_anon`.
+fn plan_match_scan(part: &crate::ast::PatternPart, part_idx: usize) -> Result<LogicalPlan, CypherError> {
     match &part.element {
         PatternElement::Node(node_pattern) => {
             let label_filter = node_pattern.labels.first().cloned();
@@ -95,12 +105,27 @@ fn plan_match_scan(part: &crate::ast::PatternPart) -> Result<LogicalPlan, Cypher
                 .variable
                 .clone()
                 .or_else(|| part.variable.clone())
-                .unwrap_or_else(|| "_anon".to_string());
+                .unwrap_or_else(|| format!("_anon_{}", part_idx));
 
             let mut current = LogicalPlan::ScanNodes {
                 label_filter,
                 variable: variable.clone(),
             };
+
+            // Add filters for additional labels (beyond the first used in the scan)
+            for label in node_pattern.labels.iter().skip(1) {
+                current = LogicalPlan::Filter {
+                    input: Box::new(current),
+                    predicate: Expression::FunctionCall {
+                        name: "__has_label".to_string(),
+                        distinct: false,
+                        args: vec![
+                            Expression::Variable(variable.clone()),
+                            Expression::Literal(Literal::String(label.clone())),
+                        ],
+                    },
+                };
+            }
 
             // Add property filters if inline properties are specified
             current = add_property_filters(current, &variable, &node_pattern.properties);
@@ -114,12 +139,27 @@ fn plan_match_scan(part: &crate::ast::PatternPart) -> Result<LogicalPlan, Cypher
                 .variable
                 .clone()
                 .or_else(|| part.variable.clone())
-                .unwrap_or_else(|| "_anon_start".to_string());
+                .unwrap_or_else(|| format!("_anon_start_{}", part_idx));
 
             let mut current = LogicalPlan::ScanNodes {
                 label_filter: start_label,
                 variable: start_var.clone(),
             };
+
+            // Add filters for additional labels on the start node
+            for label in start.labels.iter().skip(1) {
+                current = LogicalPlan::Filter {
+                    input: Box::new(current),
+                    predicate: Expression::FunctionCall {
+                        name: "__has_label".to_string(),
+                        distinct: false,
+                        args: vec![
+                            Expression::Variable(start_var.clone()),
+                            Expression::Literal(Literal::String(label.clone())),
+                        ],
+                    },
+                };
+            }
 
             // Add property filters for the start node
             current = add_property_filters(current, &start_var, &start.properties);
@@ -143,14 +183,30 @@ fn plan_match_scan(part: &crate::ast::PatternPart) -> Result<LogicalPlan, Cypher
                         .unwrap_or_else(|| format!("_anon_dst_{}", i - 1))
                 };
 
-                current = LogicalPlan::Expand {
-                    input: Box::new(current),
-                    src_variable: src_var,
-                    rel_variable: rel_var,
-                    dst_variable: dst_var.clone(),
-                    rel_types: chain_elem.relationship.rel_types.clone(),
-                    direction: chain_elem.relationship.direction.clone(),
-                };
+                if let Some(range) = &chain_elem.relationship.range {
+                    // Variable-length relationship: (a)-[*min..max]->(b)
+                    let min_hops = range.min.unwrap_or(1);
+                    let max_hops = range.max;
+                    current = LogicalPlan::VarLengthExpand {
+                        input: Box::new(current),
+                        src_variable: src_var,
+                        rel_variable: rel_var,
+                        dst_variable: dst_var.clone(),
+                        rel_types: chain_elem.relationship.rel_types.clone(),
+                        direction: chain_elem.relationship.direction.clone(),
+                        min_hops,
+                        max_hops,
+                    };
+                } else {
+                    current = LogicalPlan::Expand {
+                        input: Box::new(current),
+                        src_variable: src_var,
+                        rel_variable: rel_var,
+                        dst_variable: dst_var.clone(),
+                        rel_types: chain_elem.relationship.rel_types.clone(),
+                        direction: chain_elem.relationship.direction.clone(),
+                    };
+                }
 
                 // If the target node has label filters, add a filter for each label
                 for label in &chain_elem.node.labels {

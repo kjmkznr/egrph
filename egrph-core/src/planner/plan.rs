@@ -116,4 +116,24 @@ pub enum LogicalPlan {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
     },
+
+    /// Left outer join: for each left row, match compatible right rows using shared
+    /// variable bindings.  If no right rows match, emit the left row with right-only
+    /// variables set to NULL.  Used for OPTIONAL MATCH.
+    LeftOuterJoin {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+    },
+
+    /// Variable-length expand: traverse min..max hops along relationships.
+    VarLengthExpand {
+        input: Box<LogicalPlan>,
+        src_variable: String,
+        rel_variable: Option<String>,
+        dst_variable: String,
+        rel_types: Vec<String>,
+        direction: Direction,
+        min_hops: u64,
+        max_hops: Option<u64>,
+    },
 }

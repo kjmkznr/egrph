@@ -110,6 +110,12 @@ pub fn eval_with_params(expr: &Expression, record: &Record, params: &Parameters,
         Expression::ListComprehension { variable, list, predicate, map_expr } => {
             eval_list_comprehension(variable, list, predicate.as_deref(), map_expr.as_deref(), record, params, storage)?
         }
+        Expression::FilterPredicate { kind, variable, list, predicate } => {
+            eval_filter_predicate(kind, variable, list, predicate, record, params, storage)?
+        }
+        Expression::Reduce { accumulator, init, variable, list, body } => {
+            eval_reduce(accumulator, init, variable, list, body, record, params, storage)?
+        }
         Expression::Parameter(name) => {
             params.get(name).cloned().unwrap_or(CypherValue::Null)
         }
@@ -575,6 +581,98 @@ fn eval_list_comprehension(
     })
 }
 
+fn eval_filter_predicate(
+    kind: &FilterPredicateKind,
+    variable: &str,
+    list: &Expression,
+    predicate: &Expression,
+    record: &Record,
+    params: &Parameters,
+    storage: &GraphStorage,
+) -> Result<CypherValue, CypherError> {
+    let list_val = eval_with_params(list, record, params, storage)?;
+    Ok(match list_val {
+        CypherValue::List(items) => {
+            if items.is_empty() {
+                match kind {
+                    FilterPredicateKind::Any => CypherValue::Boolean(false),
+                    FilterPredicateKind::All => CypherValue::Boolean(true),
+                    FilterPredicateKind::None => CypherValue::Boolean(true),
+                    FilterPredicateKind::Single => CypherValue::Boolean(false),
+                }
+            } else {
+                let mut matching = 0usize;
+                let mut has_null = false;
+                for item in &items {
+                    let mut scope = record.clone();
+                    scope.insert(variable.to_string(), item.clone());
+                    let pred_val = eval_with_params(predicate, &scope, params, storage)?;
+                    match pred_val {
+                        CypherValue::Boolean(true) => matching += 1,
+                        CypherValue::Null => has_null = true,
+                        _ => {}
+                    }
+                }
+
+                match kind {
+                    FilterPredicateKind::Any => {
+                        if matching > 0 { CypherValue::Boolean(true) }
+                        else if has_null { CypherValue::Null }
+                        else { CypherValue::Boolean(false) }
+                    }
+                    FilterPredicateKind::All => {
+                        if matching == items.len() { CypherValue::Boolean(true) }
+                        else if has_null { CypherValue::Null }
+                        else { CypherValue::Boolean(false) }
+                    }
+                    FilterPredicateKind::None => {
+                        if matching > 0 { CypherValue::Boolean(false) }
+                        else if has_null { CypherValue::Null }
+                        else { CypherValue::Boolean(true) }
+                    }
+                    FilterPredicateKind::Single => {
+                        if matching == 1 && !has_null { CypherValue::Boolean(true) }
+                        else if matching > 1 { CypherValue::Boolean(false) }
+                        else if has_null { CypherValue::Null }
+                        else { CypherValue::Boolean(false) }
+                    }
+                }
+            }
+        }
+        CypherValue::Null => CypherValue::Null,
+        _ => CypherValue::Null,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn eval_reduce(
+    accumulator: &str,
+    init: &Expression,
+    variable: &str,
+    list: &Expression,
+    body: &Expression,
+    record: &Record,
+    params: &Parameters,
+    storage: &GraphStorage,
+) -> Result<CypherValue, CypherError> {
+    let list_val = eval_with_params(list, record, params, storage)?;
+    let init_val = eval_with_params(init, record, params, storage)?;
+    Ok(match list_val {
+        CypherValue::List(items) => {
+            let mut acc = init_val;
+            for item in items {
+                let mut scope = record.clone();
+                scope.insert(accumulator.to_string(), acc);
+                scope.insert(variable.to_string(), item);
+                acc = eval_with_params(body, &scope, params, storage)?;
+            }
+            acc
+        }
+        CypherValue::Null => CypherValue::Null,
+        _ => CypherValue::Null,
+    })
+}
+
 // --- Built-in functions ---
 
 fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Parameters, storage: &GraphStorage) -> Result<CypherValue, CypherError> {
@@ -649,10 +747,14 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         "tostring" => {
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
-                if matches!(val, CypherValue::Null) {
-                    CypherValue::Null
-                } else {
-                    CypherValue::String(cypher_value_to_string(&val))
+                // openCypher: toString is defined for scalars only; other types -> null (TypeError)
+                match &val {
+                    CypherValue::Null => CypherValue::Null,
+                    CypherValue::Integer(i) => CypherValue::String(i.to_string()),
+                    CypherValue::Float(f) => CypherValue::String(float_to_cypher_string(*f)),
+                    CypherValue::String(s) => CypherValue::String(s.clone()),
+                    CypherValue::Boolean(b) => CypherValue::String(b.to_string()),
+                    _ => CypherValue::Null,
                 }
             } else {
                 CypherValue::Null
@@ -675,7 +777,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                     CypherValue::String(s) => {
                         s.parse::<i64>().map(CypherValue::Integer).unwrap_or(CypherValue::Null)
                     }
-                    CypherValue::Boolean(b) => CypherValue::Integer(if *b { 1 } else { 0 }),
+                    // openCypher spec: toInteger is not defined for Boolean; return null.
                     _ => CypherValue::Null,
                 }
             } else {
@@ -701,6 +803,7 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         "toboolean" => {
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
+                // openCypher spec: toBoolean is defined for Boolean, String, and null only.
                 match &val {
                     CypherValue::Null => CypherValue::Null,
                     CypherValue::Boolean(_) => val,
@@ -711,20 +814,33 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                             _ => CypherValue::Null,
                         }
                     }
-                    CypherValue::Integer(i) => CypherValue::Boolean(*i != 0),
                     _ => CypherValue::Null,
                 }
             } else {
                 CypherValue::Null
             }
         }
-        // String functions
-        "size" | "length" => {
+        // String / collection size
+        // openCypher spec: size() applies to strings and lists; length() applies to paths.
+        "size" => {
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
                     CypherValue::String(s) => CypherValue::Integer(s.chars().count() as i64),
                     CypherValue::List(l) => CypherValue::Integer(l.len() as i64),
+                    CypherValue::Null => CypherValue::Null,
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        // openCypher spec: length() is for paths (number of hops).
+        "length" => {
+            if let Some(arg) = args.first() {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match &val {
+                    CypherValue::Path(p) => CypherValue::Integer(p.relationships.len() as i64),
                     CypherValue::Null => CypherValue::Null,
                     _ => CypherValue::Null,
                 }
@@ -860,7 +976,11 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
         }
         // Math functions
         "abs" => math_fn_1(args, record, params, storage, |v| match v {
-            CypherValue::Integer(i) => CypherValue::Integer(i.abs()),
+            // checked_abs prevents undefined behaviour for i64::MIN (whose absolute value
+            // does not fit in i64); return null on overflow to match openCypher semantics.
+            CypherValue::Integer(i) => i.checked_abs()
+                .map(CypherValue::Integer)
+                .unwrap_or(CypherValue::Null),
             CypherValue::Float(f) => CypherValue::Float(f.abs()),
             _ => CypherValue::Null,
         })?,
@@ -963,17 +1083,25 @@ fn eval_function(name: &str, args: &[Expression], record: &Record, params: &Para
                             if *st == 0 {
                                 return Ok(CypherValue::Null);
                             }
+                            // Cap to prevent accidental OOM allocation.
+                            const MAX_RANGE_ELEMENTS: usize = 1_000_000;
                             let mut result = Vec::new();
                             let mut i = *s;
                             if *st > 0 {
-                                while i <= *e {
+                                while i <= *e && result.len() < MAX_RANGE_ELEMENTS {
                                     result.push(CypherValue::Integer(i));
-                                    i += st;
+                                    match i.checked_add(*st) {
+                                        Some(next) => i = next,
+                                        None => break,
+                                    }
                                 }
                             } else {
-                                while i >= *e {
+                                while i >= *e && result.len() < MAX_RANGE_ELEMENTS {
                                     result.push(CypherValue::Integer(i));
-                                    i += st;
+                                    match i.checked_add(*st) {
+                                        Some(next) => i = next,
+                                        None => break,
+                                    }
                                 }
                             }
                             CypherValue::List(result)
@@ -1199,13 +1327,30 @@ pub fn cypher_value_to_string(val: &CypherValue) -> String {
         CypherValue::Null => "null".to_string(),
         CypherValue::Boolean(b) => b.to_string(),
         CypherValue::Integer(i) => i.to_string(),
-        CypherValue::Float(f) => f.to_string(),
+        CypherValue::Float(f) => float_to_cypher_string(*f),
         CypherValue::String(s) => s.clone(),
         CypherValue::List(_) => "[...]".to_string(),
         CypherValue::Map(_) => "{...}".to_string(),
         CypherValue::Node(n) => format!("Node({})", n.id),
         CypherValue::Relationship(e) => format!("Relationship({})", e.id),
         CypherValue::Path(_) => "Path(...)".to_string(),
+    }
+}
+
+/// Format a float as a string in a way that is consistent with openCypher:
+/// whole-number floats always include a decimal point (e.g., 1.0, not 1).
+fn float_to_cypher_string(f: f64) -> String {
+    if f.is_nan() {
+        "NaN".to_string()
+    } else if f.is_infinite() {
+        if f > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+    } else {
+        let s = format!("{}", f);
+        if s.contains('.') || s.contains('e') || s.contains('E') {
+            s
+        } else {
+            format!("{}.0", s)
+        }
     }
 }
 
@@ -1225,8 +1370,12 @@ pub fn cypher_value_to_stable_key(val: &CypherValue) -> String {
             format!("L:[{}]", inner.join(","))
         }
         CypherValue::Map(m) => {
+            // Escape backslash, colon, and comma in map keys so that a key containing
+            // ':' or ',' cannot collide with the key/value separator or entry separator.
             let mut entries: Vec<String> = m.iter()
-                .map(|(k, v)| format!("{}:{}", k, cypher_value_to_stable_key(v)))
+                .map(|(k, v)| format!("{}:{}",
+                    k.replace('\\', "\\\\").replace(':', "\\:").replace(',', "\\,"),
+                    cypher_value_to_stable_key(v)))
                 .collect();
             entries.sort();
             format!("M:{{{}}}", entries.join(","))
