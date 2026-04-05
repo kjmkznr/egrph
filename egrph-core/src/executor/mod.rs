@@ -519,24 +519,55 @@ fn execute_create_path(
     let mut result = Vec::with_capacity(base_records.len());
 
     for mut rec in base_records {
-        let start_labels = start.labels.clone();
-        let start_props = resolve_map_literal_to_properties(&start.properties, params)?;
-        let start_id = storage.create_node(start_labels, start_props);
-        if let Some(ref v) = start_var {
-            let node = storage
-                .get_node(start_id)
-                .ok_or_else(|| {
-                    CypherError::RuntimeError("Newly created node not found".to_string())
-                })?
-                .clone();
-            rec.insert(v.clone(), CypherValue::Node(node));
-        }
+        // If the start variable is already bound (e.g. from a preceding MATCH),
+        // reuse that existing node rather than creating a new one.
+        let start_id = if let Some(ref v) = start_var {
+            if let Some(CypherValue::Node(n)) = rec.get(v) {
+                n.id
+            } else {
+                let labels = start.labels.clone();
+                let props = resolve_map_literal_to_properties(&start.properties, params)?;
+                let id = storage.create_node(labels, props);
+                let node = storage
+                    .get_node(id)
+                    .ok_or_else(|| {
+                        CypherError::RuntimeError("Newly created node not found".to_string())
+                    })?
+                    .clone();
+                rec.insert(v.clone(), CypherValue::Node(node));
+                id
+            }
+        } else {
+            let labels = start.labels.clone();
+            let props = resolve_map_literal_to_properties(&start.properties, params)?;
+            storage.create_node(labels, props)
+        };
 
         let mut prev_id = start_id;
         for elem in elements {
-            let dst_labels = elem.node.labels.clone();
-            let dst_props = resolve_map_literal_to_properties(&elem.node.properties, params)?;
-            let dst_id = storage.create_node(dst_labels, dst_props);
+            // Same: reuse an already-bound destination node if present.
+            let dst_id = if let Some(ref dv) = elem.node.variable {
+                if let Some(CypherValue::Node(n)) = rec.get(dv) {
+                    n.id
+                } else {
+                    let labels = elem.node.labels.clone();
+                    let props =
+                        resolve_map_literal_to_properties(&elem.node.properties, params)?;
+                    let id = storage.create_node(labels, props);
+                    let node = storage
+                        .get_node(id)
+                        .ok_or_else(|| {
+                            CypherError::RuntimeError("Newly created node not found".to_string())
+                        })?
+                        .clone();
+                    rec.insert(dv.clone(), CypherValue::Node(node));
+                    id
+                }
+            } else {
+                let labels = elem.node.labels.clone();
+                let props = resolve_map_literal_to_properties(&elem.node.properties, params)?;
+                storage.create_node(labels, props)
+            };
 
             let edge_label = elem
                 .relationship
@@ -564,15 +595,6 @@ fn execute_create_path(
                     })?
                     .clone();
                 rec.insert(rv.clone(), CypherValue::Relationship(edge));
-            }
-            if let Some(ref dv) = elem.node.variable {
-                let node = storage
-                    .get_node(dst_id)
-                    .ok_or_else(|| {
-                        CypherError::RuntimeError("Newly created node not found".to_string())
-                    })?
-                    .clone();
-                rec.insert(dv.clone(), CypherValue::Node(node));
             }
 
             prev_id = dst_id;

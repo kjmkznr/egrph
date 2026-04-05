@@ -1344,4 +1344,31 @@ mod tests {
             .unwrap();
         assert_eq!(r.rows.len(), 2); // B と C
     }
+
+    #[test]
+    fn test_match_after_separate_create_queries() {
+        // Reproduces: CREATE in one execute() call, then MATCH relationship in another.
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
+
+        // Verify MATCH alone finds both nodes first
+        assert_eq!(g.node_count(), 2, "should have Alice and Bob in storage");
+        let match_single = g.execute("MATCH (a:Person {name: \"Alice\"}) RETURN a.name").unwrap();
+        assert_eq!(match_single.rows.len(), 1, "single-node MATCH should find Alice");
+        let match_only = g
+            .execute("MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) RETURN a.name, b.name")
+            .unwrap();
+        assert_eq!(match_only.rows.len(), 1, "MATCH should find Alice and Bob");
+
+        g.execute(
+            "MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) CREATE (a)-[:KNOWS]->(b)"
+        ).unwrap();
+        // Confirm edge was actually created
+        assert_eq!(g.edge_count(), 1, "edge should exist after MATCH+CREATE");
+        let result = g
+            .execute("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a.name AS from, b.name AS to")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
 }
