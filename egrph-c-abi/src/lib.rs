@@ -14,8 +14,10 @@ pub extern "C" fn graph_new() -> *mut CGraph {
     }))
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_free(ptr: *mut CGraph) {
+pub unsafe extern "C" fn graph_free(ptr: *mut CGraph) {
     if !ptr.is_null() {
         unsafe {
             drop(Box::from_raw(ptr));
@@ -23,8 +25,10 @@ pub extern "C" fn graph_free(ptr: *mut CGraph) {
     }
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_create_node(ptr: *mut CGraph) -> NodeId {
+pub unsafe extern "C" fn graph_create_node(ptr: *mut CGraph) -> NodeId {
     if ptr.is_null() {
         return 0;
     }
@@ -32,8 +36,11 @@ pub extern "C" fn graph_create_node(ptr: *mut CGraph) -> NodeId {
     c_graph.graph.create_node(vec![], HashMap::new())
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
+/// `label` must be a valid null-terminated C string, or null.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_create_edge(
+pub unsafe extern "C" fn graph_create_edge(
     ptr: *mut CGraph,
     label: *const c_char,
     src: NodeId,
@@ -52,8 +59,10 @@ pub extern "C" fn graph_create_edge(
     }
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_get_node_count(ptr: *const CGraph) -> usize {
+pub unsafe extern "C" fn graph_get_node_count(ptr: *const CGraph) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -61,8 +70,10 @@ pub extern "C" fn graph_get_node_count(ptr: *const CGraph) -> usize {
     c_graph.graph.node_count()
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_get_edge_count(ptr: *const CGraph) -> usize {
+pub unsafe extern "C" fn graph_get_edge_count(ptr: *const CGraph) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -70,8 +81,12 @@ pub extern "C" fn graph_get_edge_count(ptr: *const CGraph) -> usize {
     c_graph.graph.edge_count()
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
+/// `query` must be a valid null-terminated C string, or null.
+/// The returned pointer must be freed with `graph_free_string`.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_execute(ptr: *mut CGraph, query: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn graph_execute(ptr: *mut CGraph, query: *const c_char) -> *mut c_char {
     if ptr.is_null() || query.is_null() {
         let err = CString::new("{\"error\": \"null pointer\"}").unwrap_or_default();
         return err.into_raw();
@@ -155,8 +170,10 @@ fn property_value_to_json(pv: &egrph_core::PropertyValue) -> serde_json::Value {
     }
 }
 
+/// # Safety
+/// `s` must be a pointer previously returned by `graph_execute`, or null.
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_free_string(s: *mut c_char) {
+pub unsafe extern "C" fn graph_free_string(s: *mut c_char) {
     if !s.is_null() {
         unsafe {
             drop(CString::from_raw(s));
