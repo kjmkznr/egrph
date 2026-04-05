@@ -23,7 +23,13 @@ fn main() {
         // 各ノードから次のノードへエッジを張る
         let start = Instant::now();
         for i in 0..size - 1 {
-            g.create_edge("KNOWS".to_string(), i as u64, (i + 1) as u64, HashMap::new()).unwrap();
+            g.create_edge(
+                "KNOWS".to_string(),
+                i as u64,
+                (i + 1) as u64,
+                HashMap::new(),
+            )
+            .unwrap();
         }
         let duration = start.elapsed();
         println!("Create {} edges (API): {:?}", size - 1, duration);
@@ -33,18 +39,27 @@ fn main() {
         let start = Instant::now();
         let results = g.execute("MATCH (p:Person) RETURN p").unwrap();
         let duration = start.elapsed();
-        println!("MATCH (:Person) (found {}): {:?}", results.rows.len(), duration);
+        println!(
+            "MATCH (:Person) (found {}): {:?}",
+            results.rows.len(),
+            duration
+        );
 
         // 4. 特定のラベルがないノードの検索 (最悪ケース)
         let start = Instant::now();
         let results = g.execute("MATCH (n:NonExistent) RETURN n").unwrap();
         let duration = start.elapsed();
-        println!("MATCH (:NonExistent) (found {}): {:?}", results.rows.len(), duration);
+        println!(
+            "MATCH (:NonExistent) (found {}): {:?}",
+            results.rows.len(),
+            duration
+        );
 
         // 5. CREATE クエリ (Cypher)
         let start = Instant::now();
         for _i in 0..1000 {
-            g.execute("CREATE (:Person {name: \"Test\", age: 20})").unwrap();
+            g.execute("CREATE (:Person {name: \"Test\", age: 20})")
+                .unwrap();
         }
         let duration = start.elapsed();
         println!("CREATE 1000 nodes (Cypher): {:?}", duration);

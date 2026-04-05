@@ -1,15 +1,15 @@
-pub mod error;
-pub mod graph;
 pub mod ast;
+pub mod error;
+pub mod executor;
+pub mod graph;
 pub mod parser;
 pub mod planner;
-pub mod executor;
 
 // Re-export primary types for public API
-pub use graph::Graph;
-pub use graph::types::{NodeId, EdgeId, Node, Edge, PropertyValue, CypherValue, Path};
 pub use error::CypherError;
 pub use executor::result::QueryResult;
+pub use graph::Graph;
+pub use graph::types::{CypherValue, Edge, EdgeId, Node, NodeId, Path, PropertyValue};
 
 #[cfg(test)]
 mod tests {
@@ -21,8 +21,10 @@ mod tests {
         let mut g = Graph::new();
         #[allow(deprecated)]
         {
-            g.query("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-            g.query("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
+            g.query("CREATE (:Person {name: \"Alice\", age: 30})")
+                .unwrap();
+            g.query("CREATE (:Person {name: \"Bob\", age: 25})")
+                .unwrap();
 
             let results = g.query("MATCH (p:Person) RETURN p").unwrap();
             assert_eq!(results.len(), 2);
@@ -37,7 +39,9 @@ mod tests {
         let mut g = Graph::new();
         let n1 = g.create_node(vec!["Person".to_string()], HashMap::new());
         let n2 = g.create_node(vec!["Person".to_string()], HashMap::new());
-        let e1 = g.create_edge("KNOWS".to_string(), n1, n2, HashMap::new()).unwrap();
+        let e1 = g
+            .create_edge("KNOWS".to_string(), n1, n2, HashMap::new())
+            .unwrap();
 
         assert_eq!(g.node_count(), 2);
         assert_eq!(g.edge_count(), 1);
@@ -47,10 +51,14 @@ mod tests {
     #[test]
     fn test_execute_api() {
         let mut g = Graph::new();
-        let result = g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        let result = g
+            .execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
 
-        let result = g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
+        let result = g
+            .execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
 
         let result = g.execute("MATCH (p:Person) RETURN p").unwrap();
@@ -59,9 +67,9 @@ mod tests {
 
     #[test]
     fn test_parser_produces_ast() {
-        let stmt = parser::parse_with_return_extraction(
-            "CREATE (:Person {name: \"Alice\", age: 30})"
-        ).unwrap();
+        let stmt =
+            parser::parse_with_return_extraction("CREATE (:Person {name: \"Alice\", age: 30})")
+                .unwrap();
 
         match stmt {
             ast::Statement::Query(q) => {
@@ -88,9 +96,9 @@ mod tests {
     #[test]
     fn test_create_relationship() {
         let mut g = Graph::new();
-        let result = g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
+        let result = g
+            .execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
         // Should create 2 nodes and 1 edge. CREATE without RETURN produces
         // exactly 1 row per path (carrying bound variables, no projected columns).
         assert_eq!(g.node_count(), 2);
@@ -101,13 +109,12 @@ mod tests {
     #[test]
     fn test_match_relationship() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.columns[0], "a");
@@ -117,39 +124,48 @@ mod tests {
     #[test]
     fn test_where_clause() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.age > 28 RETURN n"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.age > 28 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 2); // Alice (30) and Charlie (35)
     }
 
     #[test]
     fn test_where_with_and() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.age > 28 AND n.age < 33 RETURN n"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.age > 28 AND n.age < 33 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 1); // Only Alice (30)
     }
 
     #[test]
     fn test_order_by() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name ORDER BY n.age"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN n.name ORDER BY n.age")
+            .unwrap();
         assert_eq!(result.rows.len(), 3);
         // Should be sorted by age ascending: Bob(25), Alice(30), Charlie(35)
         match &result.rows[0].values[0] {
@@ -165,13 +181,16 @@ mod tests {
     #[test]
     fn test_order_by_desc() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name ORDER BY n.age DESC"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN n.name ORDER BY n.age DESC")
+            .unwrap();
         assert_eq!(result.rows.len(), 3);
         // Should be sorted descending: Charlie(35), Alice(30), Bob(25)
         match &result.rows[0].values[0] {
@@ -187,39 +206,46 @@ mod tests {
     #[test]
     fn test_skip() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1")
+            .unwrap();
         assert_eq!(result.rows.len(), 2); // Skipped Bob(25)
     }
 
     #[test]
     fn test_limit() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n LIMIT 2"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Person) RETURN n LIMIT 2").unwrap();
         assert_eq!(result.rows.len(), 2);
     }
 
     #[test]
     fn test_skip_and_limit() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1 LIMIT 1"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1 LIMIT 1")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         // After sorting by age and skipping 1, should get Alice(30)
         match &result.rows[0].values[0] {
@@ -231,11 +257,10 @@ mod tests {
     #[test]
     fn test_return_property_access() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name, n.age"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Person) RETURN n.name, n.age").unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.columns.len(), 2);
         match &result.rows[0].values[0] {
@@ -253,9 +278,7 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Num {val: 10})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Num) RETURN n.val + 5"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Num) RETURN n.val + 5").unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Integer(i) => assert_eq!(*i, 15),
@@ -271,15 +294,21 @@ mod tests {
         g.execute("CREATE (:Num {val: 30})").unwrap();
 
         // Test >=
-        let result = g.execute("MATCH (n:Num) WHERE n.val >= 20 RETURN n").unwrap();
+        let result = g
+            .execute("MATCH (n:Num) WHERE n.val >= 20 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 2);
 
         // Test =
-        let result = g.execute("MATCH (n:Num) WHERE n.val = 20 RETURN n").unwrap();
+        let result = g
+            .execute("MATCH (n:Num) WHERE n.val = 20 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
 
         // Test <>
-        let result = g.execute("MATCH (n:Num) WHERE n.val <> 20 RETURN n").unwrap();
+        let result = g
+            .execute("MATCH (n:Num) WHERE n.val <> 20 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 2);
     }
 
@@ -290,37 +319,36 @@ mod tests {
         g.execute("CREATE (:Num {val: 20})").unwrap();
         g.execute("CREATE (:Num {val: 30})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Num) WHERE n.val = 10 OR n.val = 30 RETURN n"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Num) WHERE n.val = 10 OR n.val = 30 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 2);
     }
 
     #[test]
     fn test_match_with_relationship_type_filter() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
-        g.execute(
-            "CREATE (c:Person {name: \"Charlie\"})-[:LIKES]->(d:Person {name: \"Dave\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
+        g.execute("CREATE (c:Person {name: \"Charlie\"})-[:LIKES]->(d:Person {name: \"Dave\"})")
+            .unwrap();
 
         // Only KNOWS relationships
-        let result = g.execute(
-            "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
     }
 
     #[test]
     fn test_return_with_alias() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name AS person_name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN n.name AS person_name")
+            .unwrap();
         assert_eq!(result.columns[0], "person_name");
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice"),
@@ -331,17 +359,15 @@ mod tests {
     #[test]
     fn test_multi_clause_query() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
-        g.execute(
-            "CREATE (c:Person {name: \"Charlie\"})-[:KNOWS]->(d:Person {name: \"Dave\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
+        g.execute("CREATE (c:Person {name: \"Charlie\"})-[:KNOWS]->(d:Person {name: \"Dave\"})")
+            .unwrap();
 
         // MATCH + WHERE + RETURN with ORDER BY
-        let result = g.execute(
-            "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.name = \"Bob\" RETURN a.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.name = \"Bob\" RETURN a.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice"),
@@ -358,9 +384,11 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Bob\"})").unwrap();
         g.execute("CREATE (:Person {name: \"Amanda\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name STARTS WITH \"A\" RETURN n.name ORDER BY n.name"
-        ).unwrap();
+        let result = g
+            .execute(
+                "MATCH (n:Person) WHERE n.name STARTS WITH \"A\" RETURN n.name ORDER BY n.name",
+            )
+            .unwrap();
         assert_eq!(result.rows.len(), 2);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice"),
@@ -379,9 +407,9 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Bob\"})").unwrap();
         g.execute("CREATE (:Person {name: \"Grace\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name ENDS WITH \"ce\" RETURN n.name ORDER BY n.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name ENDS WITH \"ce\" RETURN n.name ORDER BY n.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 2); // Alice, Grace
     }
 
@@ -392,9 +420,9 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Bob\"})").unwrap();
         g.execute("CREATE (:Person {name: \"Charlie\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name CONTAINS \"li\" RETURN n.name ORDER BY n.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name CONTAINS \"li\" RETURN n.name ORDER BY n.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 2); // Alice, Charlie
     }
 
@@ -405,9 +433,9 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Bob\"})").unwrap();
         g.execute("CREATE (:Person {name: \"Amanda\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name =~ \"A.*\" RETURN n.name ORDER BY n.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name =~ \"A.*\" RETURN n.name ORDER BY n.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 2); // Alice, Amanda
     }
 
@@ -435,9 +463,12 @@ mod tests {
     #[test]
     fn test_case_simple() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 15})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 45})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 15})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 45})")
+            .unwrap();
 
         let result = g.execute(
             "MATCH (n:Person) RETURN n.name, CASE WHEN n.age < 18 THEN \"minor\" WHEN n.age >= 18 THEN \"adult\" END AS category ORDER BY n.name"
@@ -458,8 +489,10 @@ mod tests {
     #[test]
     fn test_case_with_else() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 15})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 15})")
+            .unwrap();
 
         let result = g.execute(
             "MATCH (n:Person) RETURN n.name, CASE WHEN n.age < 18 THEN \"minor\" ELSE \"adult\" END AS category ORDER BY n.name"
@@ -478,7 +511,8 @@ mod tests {
     #[test]
     fn test_string_functions() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Data {val: \"  Hello World  \"})").unwrap();
+        g.execute("CREATE (:Data {val: \"  Hello World  \"})")
+            .unwrap();
 
         let result = g.execute(
             "MATCH (n:Data) RETURN trim(n.val) AS trimmed, toUpper(n.val) AS upper, size(n.val) AS len"
@@ -503,9 +537,9 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Num {val: -5})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Num) RETURN abs(n.val), ceil(4.3), floor(4.7), round(4.5)"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Num) RETURN abs(n.val), ceil(4.3), floor(4.7), round(4.5)")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Integer(i) => assert_eq!(*i, 5),
@@ -557,9 +591,7 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: 1})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Data) RETURN range(1, 5)"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Data) RETURN range(1, 5)").unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::List(l) => {
@@ -581,12 +613,13 @@ mod tests {
     fn test_is_null_is_not_null() {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
 
         // Alice has no age property, so n.age IS NULL should match Alice
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.age IS NULL RETURN n.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.age IS NULL RETURN n.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice"),
@@ -594,9 +627,9 @@ mod tests {
         }
 
         // Bob has age, so n.age IS NOT NULL should match Bob
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.age IS NOT NULL RETURN n.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.age IS NOT NULL RETURN n.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Bob"),
@@ -609,9 +642,9 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN coalesce(n.age, 0) AS age"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN coalesce(n.age, 0) AS age")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Integer(i) => assert_eq!(*i, 0),
@@ -624,9 +657,7 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: 'Alice'})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Person) RETURN n.name").unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice"),
@@ -639,9 +670,7 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: 1})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Data) RETURN [1, 2] + [3, 4]"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Data) RETURN [1, 2] + [3, 4]").unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::List(l) => {
@@ -654,11 +683,12 @@ mod tests {
     #[test]
     fn test_string_concat() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {first: \"Alice\", last: \"Smith\"})").unwrap();
+        g.execute("CREATE (:Person {first: \"Alice\", last: \"Smith\"})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.first + \" \" + n.last AS full_name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) RETURN n.first + \" \" + n.last AS full_name")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice Smith"),
@@ -671,9 +701,9 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: 42})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Data) RETURN toString(n.val), toFloat(n.val), toInteger(\"123\")"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Data) RETURN toString(n.val), toFloat(n.val), toInteger(\"123\")")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "42"),
@@ -694,9 +724,9 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: \"hello world\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Data) RETURN replace(n.val, \"world\", \"Cypher\")"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Data) RETURN replace(n.val, \"world\", \"Cypher\")")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "hello Cypher"),
@@ -709,9 +739,9 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: \"a,b,c\"})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Data) RETURN split(n.val, \",\")"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Data) RETURN split(n.val, \",\")")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::List(l) => {
@@ -732,15 +762,15 @@ mod tests {
 
         // null AND true = null, null AND false = false
         // Testing via filter: n.missing should be null
-        let result = g.execute(
-            "MATCH (n:Data) WHERE n.val = 1 AND n.missing = 1 RETURN n"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Data) WHERE n.val = 1 AND n.missing = 1 RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 0); // null comparison = null, not true
 
         // Testing null comparison: null = null should be null (not true)
-        let result = g.execute(
-            "MATCH (n:Data) WHERE n.missing = n.other RETURN n"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Data) WHERE n.missing = n.other RETURN n")
+            .unwrap();
         assert_eq!(result.rows.len(), 0); // null = null => null => not truthy
     }
 
@@ -749,13 +779,16 @@ mod tests {
     #[test]
     fn test_with_clause() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WITH n.name AS name, n.age AS age ORDER BY age RETURN name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WITH n.name AS name, n.age AS age ORDER BY age RETURN name")
+            .unwrap();
         assert_eq!(result.rows.len(), 3);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Bob"),
@@ -766,9 +799,12 @@ mod tests {
     #[test]
     fn test_with_where() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
         let result = g.execute(
             "MATCH (n:Person) WITH n.name AS name, n.age AS age WHERE age > 28 RETURN name ORDER BY name"
@@ -783,13 +819,16 @@ mod tests {
     #[test]
     fn test_with_distinct() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Item {category: \"A\", val: 1})").unwrap();
-        g.execute("CREATE (:Item {category: \"A\", val: 2})").unwrap();
-        g.execute("CREATE (:Item {category: \"B\", val: 3})").unwrap();
+        g.execute("CREATE (:Item {category: \"A\", val: 1})")
+            .unwrap();
+        g.execute("CREATE (:Item {category: \"A\", val: 2})")
+            .unwrap();
+        g.execute("CREATE (:Item {category: \"B\", val: 3})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Item) WITH DISTINCT n.category AS cat RETURN cat ORDER BY cat"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Item) WITH DISTINCT n.category AS cat RETURN cat ORDER BY cat")
+            .unwrap();
         assert_eq!(result.rows.len(), 2); // "A" and "B"
     }
 
@@ -798,9 +837,9 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: 1})").unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Data) UNWIND [1, 2, 3] AS x RETURN x"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Data) UNWIND [1, 2, 3] AS x RETURN x")
+            .unwrap();
         assert_eq!(result.rows.len(), 3);
         match &result.rows[0].values[0] {
             CypherValue::Integer(i) => assert_eq!(*i, 1),
@@ -816,24 +855,22 @@ mod tests {
     fn test_unwind_no_match() {
         let mut g = Graph::new();
         // UNWIND without prior match (from empty row)
-        let result = g.execute(
-            "UNWIND [10, 20, 30] AS x RETURN x"
-        ).unwrap();
+        let result = g.execute("UNWIND [10, 20, 30] AS x RETURN x").unwrap();
         assert_eq!(result.rows.len(), 3);
     }
 
     #[test]
     fn test_set_property() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" SET n.age = 31"
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" SET n.age = 31")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.age"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.age")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Integer(i) => assert_eq!(*i, 31),
@@ -846,13 +883,12 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" SET n.email = \"alice@example.com\""
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" SET n.email = \"alice@example.com\"")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.email"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.email")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "alice@example.com"),
@@ -865,14 +901,11 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" SET n:Employee"
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" SET n:Employee")
+            .unwrap();
 
         // Should now be findable by :Employee label
-        let result = g.execute(
-            "MATCH (n:Employee) RETURN n.name"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Employee) RETURN n.name").unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::String(s) => assert_eq!(s, "Alice"),
@@ -883,15 +916,15 @@ mod tests {
     #[test]
     fn test_remove_property() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" REMOVE n.age"
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" REMOVE n.age")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.age"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.age")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Null => {} // age was removed
@@ -902,22 +935,18 @@ mod tests {
     #[test]
     fn test_remove_label() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person:Employee {name: \"Alice\"})").unwrap();
+        g.execute("CREATE (:Person:Employee {name: \"Alice\"})")
+            .unwrap();
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" REMOVE n:Employee"
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" REMOVE n:Employee")
+            .unwrap();
 
         // Should no longer be findable by :Employee label
-        let result = g.execute(
-            "MATCH (n:Employee) RETURN n"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Employee) RETURN n").unwrap();
         assert_eq!(result.rows.len(), 0);
 
         // But still findable by :Person
-        let result = g.execute(
-            "MATCH (n:Person) RETURN n.name"
-        ).unwrap();
+        let result = g.execute("MATCH (n:Person) RETURN n.name").unwrap();
         assert_eq!(result.rows.len(), 1);
     }
 
@@ -928,9 +957,8 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Bob\"})").unwrap();
         assert_eq!(g.node_count(), 2);
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" DELETE n"
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" DELETE n")
+            .unwrap();
 
         assert_eq!(g.node_count(), 1);
         let result = g.execute("MATCH (n:Person) RETURN n.name").unwrap();
@@ -944,29 +972,24 @@ mod tests {
     #[test]
     fn test_delete_node_with_relationship_fails() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
 
         // Deleting a connected node without DETACH should fail
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" DELETE n"
-        );
+        let result = g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" DELETE n");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_detach_delete() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
         assert_eq!(g.node_count(), 2);
         assert_eq!(g.edge_count(), 1);
 
-        g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" DETACH DELETE n"
-        ).unwrap();
+        g.execute("MATCH (n:Person) WHERE n.name = \"Alice\" DETACH DELETE n")
+            .unwrap();
 
         assert_eq!(g.node_count(), 1);
         assert_eq!(g.edge_count(), 0);
@@ -977,9 +1000,7 @@ mod tests {
         let mut g = Graph::new();
 
         // MERGE should create when not found
-        g.execute(
-            "MERGE (n:Person {name: \"Alice\"})"
-        ).unwrap();
+        g.execute("MERGE (n:Person {name: \"Alice\"})").unwrap();
         assert_eq!(g.node_count(), 1);
 
         let result = g.execute("MATCH (n:Person) RETURN n.name").unwrap();
@@ -996,9 +1017,7 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
 
         // MERGE should find existing and not create duplicate
-        g.execute(
-            "MERGE (n:Person {name: \"Alice\"})"
-        ).unwrap();
+        g.execute("MERGE (n:Person {name: \"Alice\"})").unwrap();
         assert_eq!(g.node_count(), 1); // Still just 1
 
         let result = g.execute("MATCH (n:Person) RETURN n.name").unwrap();
@@ -1009,14 +1028,13 @@ mod tests {
     fn test_merge_on_create() {
         let mut g = Graph::new();
 
-        g.execute(
-            "MERGE (n:Person {name: \"Alice\"}) ON CREATE SET n.created = true"
-        ).unwrap();
+        g.execute("MERGE (n:Person {name: \"Alice\"}) ON CREATE SET n.created = true")
+            .unwrap();
         assert_eq!(g.node_count(), 1);
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.created"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.created")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Boolean(b) => assert!(*b),
@@ -1027,16 +1045,16 @@ mod tests {
     #[test]
     fn test_merge_on_match() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", visits: 0})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", visits: 0})")
+            .unwrap();
 
-        g.execute(
-            "MERGE (n:Person {name: \"Alice\"}) ON MATCH SET n.visits = 1"
-        ).unwrap();
+        g.execute("MERGE (n:Person {name: \"Alice\"}) ON MATCH SET n.visits = 1")
+            .unwrap();
         assert_eq!(g.node_count(), 1);
 
-        let result = g.execute(
-            "MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.visits"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WHERE n.name = \"Alice\" RETURN n.visits")
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         match &result.rows[0].values[0] {
             CypherValue::Integer(i) => assert_eq!(*i, 1),
@@ -1047,14 +1065,12 @@ mod tests {
     #[test]
     fn test_delete_relationship() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
         assert_eq!(g.edge_count(), 1);
 
-        g.execute(
-            "MATCH (a:Person)-[r:KNOWS]->(b:Person) DELETE r"
-        ).unwrap();
+        g.execute("MATCH (a:Person)-[r:KNOWS]->(b:Person) DELETE r")
+            .unwrap();
 
         assert_eq!(g.edge_count(), 0);
         assert_eq!(g.node_count(), 2); // Nodes should still exist
@@ -1063,13 +1079,16 @@ mod tests {
     #[test]
     fn test_with_limit() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\", age: 35})")
+            .unwrap();
 
-        let result = g.execute(
-            "MATCH (n:Person) WITH n ORDER BY n.age LIMIT 2 RETURN n.name"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (n:Person) WITH n ORDER BY n.age LIMIT 2 RETURN n.name")
+            .unwrap();
         assert_eq!(result.rows.len(), 2);
     }
 
@@ -1086,8 +1105,15 @@ mod tests {
 
         // MATCH (n:A:B) は A と B の両方を持つノードのみを返す
         let result = g.execute("MATCH (n:A:B) RETURN n.name").unwrap();
-        assert_eq!(result.rows.len(), 1, "MATCH (n:A:B) should return only nodes with both labels");
-        assert_eq!(result.rows[0].values[0], CypherValue::String("both".to_string()));
+        assert_eq!(
+            result.rows.len(),
+            1,
+            "MATCH (n:A:B) should return only nodes with both labels"
+        );
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("both".to_string())
+        );
     }
 
     // Issue 4 & 6: toString() の型チェックと Float 表現
@@ -1124,7 +1150,9 @@ mod tests {
         let r = g.execute("RETURN any(x IN [1, 2, 3] WHERE x > 2)").unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
 
-        let r = g.execute("RETURN any(x IN [1, 2, 3] WHERE x > 10)").unwrap();
+        let r = g
+            .execute("RETURN any(x IN [1, 2, 3] WHERE x > 10)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
 
         // 空リスト → false
@@ -1151,10 +1179,14 @@ mod tests {
     fn test_none_predicate() {
         let mut g = Graph::new();
 
-        let r = g.execute("RETURN none(x IN [1, 2, 3] WHERE x > 10)").unwrap();
+        let r = g
+            .execute("RETURN none(x IN [1, 2, 3] WHERE x > 10)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
 
-        let r = g.execute("RETURN none(x IN [1, 2, 3] WHERE x > 2)").unwrap();
+        let r = g
+            .execute("RETURN none(x IN [1, 2, 3] WHERE x > 2)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
     }
 
@@ -1162,10 +1194,14 @@ mod tests {
     fn test_single_predicate() {
         let mut g = Graph::new();
 
-        let r = g.execute("RETURN single(x IN [1, 2, 3] WHERE x = 2)").unwrap();
+        let r = g
+            .execute("RETURN single(x IN [1, 2, 3] WHERE x = 2)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
 
-        let r = g.execute("RETURN single(x IN [1, 2, 3] WHERE x > 1)").unwrap();
+        let r = g
+            .execute("RETURN single(x IN [1, 2, 3] WHERE x > 1)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Boolean(false));
     }
 
@@ -1174,11 +1210,15 @@ mod tests {
         let mut g = Graph::new();
 
         // reduce(s = 0, x IN [1, 2, 3] | s + x) = 6
-        let r = g.execute("RETURN reduce(s = 0, x IN [1, 2, 3] | s + x)").unwrap();
+        let r = g
+            .execute("RETURN reduce(s = 0, x IN [1, 2, 3] | s + x)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::Integer(6));
 
         // reduce(s = \"\", x IN [\"a\", \"b\", \"c\"] | s + x) = \"abc\"
-        let r = g.execute("RETURN reduce(s = \"\", x IN [\"a\", \"b\", \"c\"] | s + x)").unwrap();
+        let r = g
+            .execute("RETURN reduce(s = \"\", x IN [\"a\", \"b\", \"c\"] | s + x)")
+            .unwrap();
         assert_eq!(r.rows[0].values[0], CypherValue::String("abc".to_string()));
     }
 
@@ -1189,12 +1229,15 @@ mod tests {
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
 
         // AliceにはKNOWSリレーションシップがないので r と b は NULL になる
-        let result = g.execute(
-            "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a.name, r, b"
-        ).unwrap();
+        let result = g
+            .execute("MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a.name, r, b")
+            .unwrap();
 
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
         assert_eq!(result.rows[0].values[1], CypherValue::Null);
         assert_eq!(result.rows[0].values[2], CypherValue::Null);
     }
@@ -1202,9 +1245,8 @@ mod tests {
     #[test]
     fn test_optional_match_with_match() {
         let mut g = Graph::new();
-        g.execute(
-            "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
-        ).unwrap();
+        g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
+            .unwrap();
 
         // AliceはBobを知っているので結果が返る
         let result = g.execute(
@@ -1212,17 +1254,22 @@ mod tests {
         ).unwrap();
 
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
-        assert_eq!(result.rows[0].values[1], CypherValue::String("Bob".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(
+            result.rows[0].values[1],
+            CypherValue::String("Bob".to_string())
+        );
     }
 
     #[test]
     fn test_optional_match_mixed() {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
-        g.execute(
-            "CREATE (c:Person {name: \"Charlie\"})-[:KNOWS]->(d:Person {name: \"Dave\"})"
-        ).unwrap();
+        g.execute("CREATE (c:Person {name: \"Charlie\"})-[:KNOWS]->(d:Person {name: \"Dave\"})")
+            .unwrap();
 
         // AliceはKNOWSなし(NULL)、CharlieはDaveを知っている
         let result = g.execute(
@@ -1231,10 +1278,15 @@ mod tests {
 
         assert_eq!(result.rows.len(), 3); // Alice(null), Charlie(Dave), Dave(null)
         // Charlie → Dave のペアが含まれているか確認
-        let charlie_row = result.rows.iter()
+        let charlie_row = result
+            .rows
+            .iter()
             .find(|r| r.values[0] == CypherValue::String("Charlie".to_string()));
         assert!(charlie_row.is_some());
-        assert_eq!(charlie_row.unwrap().values[1], CypherValue::String("Dave".to_string()));
+        assert_eq!(
+            charlie_row.unwrap().values[1],
+            CypherValue::String("Dave".to_string())
+        );
     }
 
     // Issue 2: 可変長リレーションシップ
@@ -1247,17 +1299,23 @@ mod tests {
         ).unwrap();
 
         // 1ホップ
-        let r = g.execute("MATCH (a:Node {name: \"A\"})-[*1..1]->(b) RETURN b.name").unwrap();
+        let r = g
+            .execute("MATCH (a:Node {name: \"A\"})-[*1..1]->(b) RETURN b.name")
+            .unwrap();
         assert_eq!(r.rows.len(), 1);
         assert_eq!(r.rows[0].values[0], CypherValue::String("B".to_string()));
 
         // 2ホップ
-        let r = g.execute("MATCH (a:Node {name: \"A\"})-[*2..2]->(b) RETURN b.name").unwrap();
+        let r = g
+            .execute("MATCH (a:Node {name: \"A\"})-[*2..2]->(b) RETURN b.name")
+            .unwrap();
         assert_eq!(r.rows.len(), 1);
         assert_eq!(r.rows[0].values[0], CypherValue::String("C".to_string()));
 
         // 1〜2ホップ
-        let r = g.execute("MATCH (a:Node {name: \"A\"})-[*1..2]->(b) RETURN b.name ORDER BY b.name").unwrap();
+        let r = g
+            .execute("MATCH (a:Node {name: \"A\"})-[*1..2]->(b) RETURN b.name ORDER BY b.name")
+            .unwrap();
         assert_eq!(r.rows.len(), 2);
     }
 
@@ -1269,7 +1327,9 @@ mod tests {
         ).unwrap();
 
         // A から到達可能な全ノード (*1以上)
-        let r = g.execute("MATCH (a:VNode {name: \"A\"})-[*]->(b) RETURN b.name ORDER BY b.name").unwrap();
+        let r = g
+            .execute("MATCH (a:VNode {name: \"A\"})-[*]->(b) RETURN b.name ORDER BY b.name")
+            .unwrap();
         assert_eq!(r.rows.len(), 2); // B と C
     }
 }

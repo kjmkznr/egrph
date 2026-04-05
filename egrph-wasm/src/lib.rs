@@ -1,5 +1,5 @@
-use wasm_bindgen::prelude::*;
 use egrph_core::{CypherValue, Graph, PropertyValue};
+use wasm_bindgen::prelude::*;
 
 /// In-memory graph database exposed to JavaScript via WebAssembly.
 ///
@@ -51,10 +51,7 @@ impl WasmGraph {
                 let val = match row.values.get(i) {
                     Some(v) => cypher_value_to_json(v)?,
                     None => {
-                        debug_assert!(
-                            false,
-                            "column '{col}' has no value in row — executor bug"
-                        );
+                        debug_assert!(false, "column '{col}' has no value in row — executor bug");
                         serde_json::Value::Null
                     }
                 };
@@ -109,7 +106,10 @@ fn cypher_value_to_json(val: &CypherValue) -> Result<serde_json::Value, JsValue>
         CypherValue::Node(n) => {
             let mut obj = serde_json::Map::new();
             // Serialize as string: JS JSON.parse loses precision for u64 > 2^53.
-            obj.insert("_id".to_string(), serde_json::Value::String(n.id.to_string()));
+            obj.insert(
+                "_id".to_string(),
+                serde_json::Value::String(n.id.to_string()),
+            );
             obj.insert(
                 "_labels".to_string(),
                 serde_json::Value::Array(
@@ -124,31 +124,34 @@ fn cypher_value_to_json(val: &CypherValue) -> Result<serde_json::Value, JsValue>
                 .iter()
                 .map(|(k, v)| property_value_to_json(v).map(|v| (k.clone(), v)))
                 .collect::<Result<_, _>>()?;
-            obj.insert(
-                "_properties".to_string(),
-                serde_json::Value::Object(props),
-            );
+            obj.insert("_properties".to_string(), serde_json::Value::Object(props));
             serde_json::Value::Object(obj)
         }
         CypherValue::Relationship(e) => {
             let mut obj = serde_json::Map::new();
             // Serialize as strings: JS JSON.parse loses precision for u64 > 2^53.
-            obj.insert("_id".to_string(), serde_json::Value::String(e.id.to_string()));
+            obj.insert(
+                "_id".to_string(),
+                serde_json::Value::String(e.id.to_string()),
+            );
             obj.insert(
                 "_type".to_string(),
                 serde_json::Value::String(e.label.clone()),
             );
-            obj.insert("_src".to_string(), serde_json::Value::String(e.src.to_string()));
-            obj.insert("_dst".to_string(), serde_json::Value::String(e.dst.to_string()));
+            obj.insert(
+                "_src".to_string(),
+                serde_json::Value::String(e.src.to_string()),
+            );
+            obj.insert(
+                "_dst".to_string(),
+                serde_json::Value::String(e.dst.to_string()),
+            );
             let props: serde_json::Map<String, serde_json::Value> = e
                 .properties
                 .iter()
                 .map(|(k, v)| property_value_to_json(v).map(|v| (k.clone(), v)))
                 .collect::<Result<_, _>>()?;
-            obj.insert(
-                "_properties".to_string(),
-                serde_json::Value::Object(props),
-            );
+            obj.insert("_properties".to_string(), serde_json::Value::Object(props));
             serde_json::Value::Object(obj)
         }
         CypherValue::Path(_) => {
@@ -178,7 +181,8 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_create_and_query() {
         let mut g = WasmGraph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
         let json = g.execute("MATCH (p:Person) RETURN p.name, p.age").unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v[0]["p.name"], "Alice");
@@ -211,8 +215,10 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_where_filter() {
         let mut g = WasmGraph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
         let json = g
             .execute("MATCH (p:Person) WHERE p.age > 28 RETURN p.name")
             .unwrap();

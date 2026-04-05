@@ -1,7 +1,7 @@
-use pyo3::prelude::*;
+use egrph_core::{EdgeId, Graph, NodeId, PropertyValue};
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use egrph_core::{Graph, NodeId, EdgeId, PropertyValue};
 use std::collections::HashMap;
 
 #[pyclass]
@@ -13,10 +13,16 @@ struct PyGraph {
 impl PyGraph {
     #[new]
     fn new() -> Self {
-        PyGraph { inner: Graph::new() }
+        PyGraph {
+            inner: Graph::new(),
+        }
     }
 
-    fn create_node(&mut self, labels: Vec<String>, properties: Bound<'_, PyDict>) -> PyResult<NodeId> {
+    fn create_node(
+        &mut self,
+        labels: Vec<String>,
+        properties: Bound<'_, PyDict>,
+    ) -> PyResult<NodeId> {
         let mut props = HashMap::new();
         for (k, v) in properties {
             let key = k.extract::<String>()?;
@@ -33,7 +39,13 @@ impl PyGraph {
         Ok(self.inner.create_node(labels, props))
     }
 
-    fn create_edge(&mut self, label: String, src: NodeId, dst: NodeId, properties: Bound<'_, PyDict>) -> PyResult<EdgeId> {
+    fn create_edge(
+        &mut self,
+        label: String,
+        src: NodeId,
+        dst: NodeId,
+        properties: Bound<'_, PyDict>,
+    ) -> PyResult<EdgeId> {
         let mut props = HashMap::new();
         for (k, v) in properties {
             let key = k.extract::<String>()?;
@@ -47,7 +59,9 @@ impl PyGraph {
                 props.insert(key, PropertyValue::Bool(b));
             }
         }
-        self.inner.create_edge(label, src, dst, props).map_err(PyValueError::new_err)
+        self.inner
+            .create_edge(label, src, dst, props)
+            .map_err(PyValueError::new_err)
     }
 
     fn get_node_count(&self) -> usize {
@@ -59,7 +73,10 @@ impl PyGraph {
     }
 
     fn execute(&mut self, query: &str) -> PyResult<String> {
-        let result = self.inner.execute(query).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let result = self
+            .inner
+            .execute(query)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let mut rows_json = Vec::new();
         for row in &result.rows {
             let mut obj = serde_json::Map::new();
@@ -78,11 +95,9 @@ fn property_value_to_json(pv: &egrph_core::PropertyValue) -> serde_json::Value {
     match pv {
         egrph_core::PropertyValue::String(s) => serde_json::Value::String(s.clone()),
         egrph_core::PropertyValue::Int(i) => serde_json::Value::Number((*i).into()),
-        egrph_core::PropertyValue::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        egrph_core::PropertyValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         egrph_core::PropertyValue::Bool(b) => serde_json::Value::Bool(*b),
     }
 }
@@ -92,11 +107,9 @@ fn cypher_value_to_json(val: &egrph_core::CypherValue) -> serde_json::Value {
         egrph_core::CypherValue::Null => serde_json::Value::Null,
         egrph_core::CypherValue::Boolean(b) => serde_json::Value::Bool(*b),
         egrph_core::CypherValue::Integer(i) => serde_json::Value::Number((*i).into()),
-        egrph_core::CypherValue::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        egrph_core::CypherValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         egrph_core::CypherValue::String(s) => serde_json::Value::String(s.clone()),
         egrph_core::CypherValue::List(items) => {
             serde_json::Value::Array(items.iter().map(cypher_value_to_json).collect())
@@ -111,10 +124,17 @@ fn cypher_value_to_json(val: &egrph_core::CypherValue) -> serde_json::Value {
         egrph_core::CypherValue::Node(n) => {
             let mut obj = serde_json::Map::new();
             obj.insert("_id".to_string(), serde_json::Value::Number(n.id.into()));
-            obj.insert("_labels".to_string(), serde_json::Value::Array(
-                n.labels.iter().map(|l| serde_json::Value::String(l.clone())).collect()
-            ));
-            let props: serde_json::Map<String, serde_json::Value> = n.properties
+            obj.insert(
+                "_labels".to_string(),
+                serde_json::Value::Array(
+                    n.labels
+                        .iter()
+                        .map(|l| serde_json::Value::String(l.clone()))
+                        .collect(),
+                ),
+            );
+            let props: serde_json::Map<String, serde_json::Value> = n
+                .properties
                 .iter()
                 .map(|(k, v)| (k.clone(), property_value_to_json(v)))
                 .collect();
@@ -124,10 +144,14 @@ fn cypher_value_to_json(val: &egrph_core::CypherValue) -> serde_json::Value {
         egrph_core::CypherValue::Relationship(e) => {
             let mut obj = serde_json::Map::new();
             obj.insert("_id".to_string(), serde_json::Value::Number(e.id.into()));
-            obj.insert("_type".to_string(), serde_json::Value::String(e.label.clone()));
+            obj.insert(
+                "_type".to_string(),
+                serde_json::Value::String(e.label.clone()),
+            );
             obj.insert("_src".to_string(), serde_json::Value::Number(e.src.into()));
             obj.insert("_dst".to_string(), serde_json::Value::Number(e.dst.into()));
-            let props: serde_json::Map<String, serde_json::Value> = e.properties
+            let props: serde_json::Map<String, serde_json::Value> = e
+                .properties
                 .iter()
                 .map(|(k, v)| (k.clone(), property_value_to_json(v)))
                 .collect();

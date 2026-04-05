@@ -33,9 +33,13 @@ pub fn parse_with_return_extraction(input: &str) -> Result<Statement, CypherErro
     parse(input)
 }
 
-
-fn parse_clause(pair: pest::iterators::Pair<Rule>, clauses: &mut Vec<Clause>) -> Result<(), CypherError> {
-    let inner = pair.into_inner().next()
+fn parse_clause(
+    pair: pest::iterators::Pair<Rule>,
+    clauses: &mut Vec<Clause>,
+) -> Result<(), CypherError> {
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty clause".to_string()))?;
     match inner.as_rule() {
         Rule::create_clause => {
@@ -85,20 +89,30 @@ fn parse_create_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyph
 }
 
 fn parse_match_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty MATCH clause".to_string()))?;
     let (optional, pattern_list_pair) = match inner.as_rule() {
         Rule::optional_match => {
-            let pl = inner.into_inner().next()
+            let pl = inner
+                .into_inner()
+                .next()
                 .ok_or_else(|| CypherError::ParseError("Empty OPTIONAL MATCH".to_string()))?;
             (true, pl)
         }
         Rule::regular_match => {
-            let pl = inner.into_inner().next()
+            let pl = inner
+                .into_inner()
+                .next()
                 .ok_or_else(|| CypherError::ParseError("Empty MATCH".to_string()))?;
             (false, pl)
         }
-        _ => return Err(CypherError::ParseError("Expected match variant".to_string())),
+        _ => {
+            return Err(CypherError::ParseError(
+                "Expected match variant".to_string(),
+            ));
+        }
     };
 
     let parts = parse_pattern_list(pattern_list_pair)?;
@@ -144,7 +158,9 @@ fn parse_return_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyph
 }
 
 fn parse_where_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, CypherError> {
-    let expr_pair = pair.into_inner().next()
+    let expr_pair = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty WHERE clause".to_string()))?;
     let expression = parse_expression(expr_pair)?;
     Ok(Clause::Where(WhereClause { expression }))
@@ -209,12 +225,10 @@ fn parse_unwind_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyph
     }
 
     Ok(Clause::Unwind(UnwindClause {
-        expression: expression.ok_or_else(|| {
-            CypherError::ParseError("Missing expression in UNWIND".to_string())
-        })?,
-        alias: alias.ok_or_else(|| {
-            CypherError::ParseError("Missing alias in UNWIND".to_string())
-        })?,
+        expression: expression
+            .ok_or_else(|| CypherError::ParseError("Missing expression in UNWIND".to_string()))?,
+        alias: alias
+            .ok_or_else(|| CypherError::ParseError("Missing alias in UNWIND".to_string()))?,
     }))
 }
 
@@ -229,7 +243,9 @@ fn parse_set_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, CypherE
 }
 
 fn parse_set_item(pair: pest::iterators::Pair<Rule>) -> Result<SetItem, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty SET item".to_string()))?;
     match inner.as_rule() {
         Rule::set_property => {
@@ -320,7 +336,9 @@ fn parse_remove_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyph
 }
 
 fn parse_remove_item(pair: pest::iterators::Pair<Rule>) -> Result<RemoveItem, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty REMOVE item".to_string()))?;
     match inner.as_rule() {
         Rule::remove_property => {
@@ -372,7 +390,10 @@ fn parse_delete_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyph
         }
     }
 
-    Ok(Clause::Delete(DeleteClause { detach, expressions }))
+    Ok(Clause::Delete(DeleteClause {
+        detach,
+        expressions,
+    }))
 }
 
 fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, CypherError> {
@@ -386,7 +407,9 @@ fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
                 pattern_element = Some(parse_pattern_element(inner)?);
             }
             Rule::merge_action => {
-                let Some(action_inner) = inner.into_inner().next() else { continue };
+                let Some(action_inner) = inner.into_inner().next() else {
+                    continue;
+                };
                 match action_inner.as_rule() {
                     Rule::on_create_action => {
                         let mut items = Vec::new();
@@ -413,9 +436,8 @@ fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
         }
     }
 
-    let element = pattern_element.ok_or_else(|| {
-        CypherError::ParseError("Missing pattern in MERGE".to_string())
-    })?;
+    let element = pattern_element
+        .ok_or_else(|| CypherError::ParseError("Missing pattern in MERGE".to_string()))?;
 
     // Wrap in a PatternPart and Pattern
     let variable = match &element {
@@ -435,15 +457,15 @@ fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
 }
 
 fn parse_return_items(pair: pest::iterators::Pair<Rule>) -> Result<Vec<ReturnItem>, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty return items".to_string()))?;
     match inner.as_rule() {
-        Rule::star_item => {
-            Ok(vec![ReturnItem {
-                expression: Expression::Variable("*".to_string()),
-                alias: None,
-            }])
-        }
+        Rule::star_item => Ok(vec![ReturnItem {
+            expression: Expression::Variable("*".to_string()),
+            alias: None,
+        }]),
         Rule::return_item_list => {
             let mut items = Vec::new();
             for item_pair in inner.into_inner() {
@@ -511,7 +533,9 @@ fn parse_order_by(pair: pest::iterators::Pair<Rule>) -> Result<Vec<SortItem>, Cy
 }
 
 fn parse_skip_limit_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
-    let expr_pair = pair.into_inner().next()
+    let expr_pair = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty SKIP/LIMIT expression".to_string()))?;
     parse_expression(expr_pair)
 }
@@ -557,9 +581,7 @@ fn parse_pattern(pair: pest::iterators::Pair<Rule>) -> Result<PatternPart, Cyphe
     Ok(PatternPart { variable, element })
 }
 
-fn parse_pattern_element(
-    pair: pest::iterators::Pair<Rule>,
-) -> Result<PatternElement, CypherError> {
+fn parse_pattern_element(pair: pest::iterators::Pair<Rule>) -> Result<PatternElement, CypherError> {
     let mut nodes = Vec::new();
     let mut rels = Vec::new();
 
@@ -576,8 +598,9 @@ fn parse_pattern_element(
     }
 
     if rels.is_empty() {
-        Ok(PatternElement::Node(nodes.into_iter().next()
-            .ok_or_else(|| CypherError::ParseError("Missing node in pattern element".to_string()))?))
+        Ok(PatternElement::Node(nodes.into_iter().next().ok_or_else(
+            || CypherError::ParseError("Missing node in pattern element".to_string()),
+        )?))
     } else {
         let start = nodes.remove(0);
         let elements: Vec<PatternChainElement> = rels
@@ -689,22 +712,28 @@ fn parse_range_literal(pair: pest::iterators::Pair<Rule>) -> Result<RangeSpec, C
         let min = if left.is_empty() {
             None
         } else {
-            Some(left.trim().parse().map_err(|_| {
-                CypherError::ParseError("Invalid range min".to_string())
-            })?)
+            Some(
+                left.trim()
+                    .parse()
+                    .map_err(|_| CypherError::ParseError("Invalid range min".to_string()))?,
+            )
         };
         let max = if right.is_empty() {
             None
         } else {
-            Some(right.trim().parse().map_err(|_| {
-                CypherError::ParseError("Invalid range max".to_string())
-            })?)
+            Some(
+                right
+                    .trim()
+                    .parse()
+                    .map_err(|_| CypherError::ParseError("Invalid range max".to_string()))?,
+            )
         };
         Ok(RangeSpec { min, max })
     } else {
-        let n: u64 = after_star.trim().parse().map_err(|_| {
-            CypherError::ParseError("Invalid range".to_string())
-        })?;
+        let n: u64 = after_star
+            .trim()
+            .parse()
+            .map_err(|_| CypherError::ParseError("Invalid range".to_string()))?;
         Ok(RangeSpec {
             min: Some(n),
             max: Some(n),
@@ -744,7 +773,9 @@ fn parse_properties(pair: pest::iterators::Pair<Rule>) -> Result<MapLiteral, Cyp
 // --- Expression parsing ---
 
 pub fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty expression".to_string()))?;
     parse_or_expression(inner)
 }
@@ -800,7 +831,9 @@ fn parse_and_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression,
 fn parse_not_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
     let parts: Vec<pest::iterators::Pair<Rule>> = pair.into_inner().collect();
     let not_count = parts.iter().filter(|p| p.as_rule() == Rule::not_kw).count();
-    let comp = parts.into_iter().find(|p| p.as_rule() != Rule::not_kw)
+    let comp = parts
+        .into_iter()
+        .find(|p| p.as_rule() != Rule::not_kw)
         .ok_or_else(|| CypherError::ParseError("Missing operand in NOT expression".to_string()))?;
     let mut expr = parse_comparison_expression(comp)?;
     for _ in 0..not_count {
@@ -821,7 +854,8 @@ fn parse_comparison_expression(
     let mut expr = parse_string_predicate_expression(iter.next().unwrap())?;
 
     while let Some(op_pair) = iter.next() {
-        let right_pair = iter.next()
+        let right_pair = iter
+            .next()
             .ok_or_else(|| CypherError::ParseError("Missing right operand".to_string()))?;
 
         if op_pair.as_str() == "=~" {
@@ -842,7 +876,7 @@ fn parse_comparison_expression(
                     return Err(CypherError::ParseError(format!(
                         "Unknown comparison op: {}",
                         op_pair.as_str()
-                    )))
+                    )));
                 }
             };
             let right = parse_string_predicate_expression(right_pair)?;
@@ -860,17 +894,20 @@ fn parse_string_predicate_expression(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<Expression, CypherError> {
     let mut inner = pair.into_inner();
-    let add_pair = inner.next()
+    let add_pair = inner
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty string predicate expression".to_string()))?;
     let expr = parse_add_expression(add_pair)?;
 
     if let Some(suffix_pair) = inner.next() {
         // string_predicate_suffix
         let mut suffix_inner = suffix_pair.into_inner();
-        let kw_pair = suffix_inner.next()
-            .ok_or_else(|| CypherError::ParseError("Missing keyword in string predicate".to_string()))?;
-        let rhs_pair = suffix_inner.next()
-            .ok_or_else(|| CypherError::ParseError("Missing right-hand side in string predicate".to_string()))?;
+        let kw_pair = suffix_inner.next().ok_or_else(|| {
+            CypherError::ParseError("Missing keyword in string predicate".to_string())
+        })?;
+        let rhs_pair = suffix_inner.next().ok_or_else(|| {
+            CypherError::ParseError("Missing right-hand side in string predicate".to_string())
+        })?;
         let rhs = parse_add_expression(rhs_pair)?;
 
         match kw_pair.as_rule() {
@@ -920,7 +957,7 @@ fn parse_add_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression,
                 return Err(CypherError::ParseError(format!(
                     "Unknown add op: {}",
                     op_pair.as_str()
-                )))
+                )));
             }
         };
         let right = parse_mult_expression(
@@ -954,7 +991,7 @@ fn parse_mult_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression
                 return Err(CypherError::ParseError(format!(
                     "Unknown mult op: {}",
                     op_pair.as_str()
-                )))
+                )));
             }
         };
         let right = parse_power_expression(
@@ -1025,9 +1062,7 @@ fn parse_unary_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expressio
     }
 }
 
-fn parse_postfix_expression(
-    pair: pest::iterators::Pair<Rule>,
-) -> Result<Expression, CypherError> {
+fn parse_postfix_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
     let mut expr = None;
     let mut null_is_not = None;
 
@@ -1037,10 +1072,14 @@ fn parse_postfix_expression(
                 expr = Some(parse_atom(inner)?);
             }
             Rule::postfix_op => {
-                let Some(op_inner) = inner.into_inner().next() else { continue };
+                let Some(op_inner) = inner.into_inner().next() else {
+                    continue;
+                };
                 match op_inner.as_rule() {
                     Rule::property_lookup => {
-                        let Some(prop_pair) = op_inner.into_inner().next() else { continue };
+                        let Some(prop_pair) = op_inner.into_inner().next() else {
+                            continue;
+                        };
                         let prop_name = prop_pair.as_str().to_string();
                         expr = Some(Expression::Property(
                             Box::new(expr.take().unwrap()),
@@ -1048,8 +1087,12 @@ fn parse_postfix_expression(
                         ));
                     }
                     Rule::subscript => {
-                        let Some(content) = op_inner.into_inner().next() else { continue };
-                        let Some(content_inner) = content.into_inner().next() else { continue };
+                        let Some(content) = op_inner.into_inner().next() else {
+                            continue;
+                        };
+                        let Some(content_inner) = content.into_inner().next() else {
+                            continue;
+                        };
                         match content_inner.as_rule() {
                             Rule::slice_range => {
                                 let (start, end) = parse_slice_range(content_inner)?;
@@ -1080,8 +1123,7 @@ fn parse_postfix_expression(
         }
     }
 
-    let mut result =
-        expr.ok_or_else(|| CypherError::ParseError("Missing atom".to_string()))?;
+    let mut result = expr.ok_or_else(|| CypherError::ParseError("Missing atom".to_string()))?;
 
     if let Some(is_not) = null_is_not {
         result = if is_not {
@@ -1143,7 +1185,9 @@ fn parse_slice_range(pair: pest::iterators::Pair<Rule>) -> Result<SliceRange, Cy
 }
 
 fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty atom".to_string()))?;
     match inner.as_rule() {
         Rule::case_expression => parse_case_expression(inner),
@@ -1154,8 +1198,9 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
         Rule::parameter => parse_parameter(inner),
         Rule::function_invocation => parse_function_invocation(inner),
         Rule::parenthesized_expression => {
-            let expr_pair = inner.into_inner().next()
-                .ok_or_else(|| CypherError::ParseError("Empty parenthesized expression".to_string()))?;
+            let expr_pair = inner.into_inner().next().ok_or_else(|| {
+                CypherError::ParseError("Empty parenthesized expression".to_string())
+            })?;
             parse_expression(expr_pair)
         }
         Rule::variable => Ok(Expression::Variable(inner.as_str().to_string())),
@@ -1173,7 +1218,10 @@ fn parse_filter_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Expressio
     let mut list_expr = None;
     let mut predicate_expr = None;
 
-    enum Section { List, Predicate }
+    enum Section {
+        List,
+        Predicate,
+    }
     let mut section = Section::List;
 
     for inner in pair.into_inner() {
@@ -1193,8 +1241,12 @@ fn parse_filter_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Expressio
             Rule::expression => {
                 let expr = parse_expression(inner)?;
                 match section {
-                    Section::List => { list_expr = Some(expr); }
-                    Section::Predicate => { predicate_expr = Some(expr); }
+                    Section::List => {
+                        list_expr = Some(expr);
+                    }
+                    Section::Predicate => {
+                        predicate_expr = Some(expr);
+                    }
                 }
             }
             _ => {}
@@ -1206,7 +1258,12 @@ fn parse_filter_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Expressio
         "all" => FilterPredicateKind::All,
         "none" => FilterPredicateKind::None,
         "single" => FilterPredicateKind::Single,
-        _ => return Err(CypherError::ParseError(format!("Unknown filter predicate: {}", kind_str))),
+        _ => {
+            return Err(CypherError::ParseError(format!(
+                "Unknown filter predicate: {}",
+                kind_str
+            )));
+        }
     };
 
     Ok(Expression::FilterPredicate {
@@ -1226,7 +1283,11 @@ fn parse_reduce_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expressi
     let mut variables: Vec<String> = Vec::new();
     let mut expressions: Vec<Expression> = Vec::new();
 
-    enum ExprSection { Init, List, Body }
+    enum ExprSection {
+        Init,
+        List,
+        Body,
+    }
     let mut section = ExprSection::Init;
 
     for inner in pair.into_inner() {
@@ -1244,9 +1305,15 @@ fn parse_reduce_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expressi
             Rule::expression => {
                 let expr = parse_expression(inner)?;
                 match section {
-                    ExprSection::Init => { expressions.push(expr); }
-                    ExprSection::List => { expressions.push(expr); }
-                    ExprSection::Body => { expressions.push(expr); }
+                    ExprSection::Init => {
+                        expressions.push(expr);
+                    }
+                    ExprSection::List => {
+                        expressions.push(expr);
+                    }
+                    ExprSection::Body => {
+                        expressions.push(expr);
+                    }
                 }
             }
             _ => {}
@@ -1254,7 +1321,9 @@ fn parse_reduce_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expressi
     }
 
     if variables.len() < 2 || expressions.len() < 3 {
-        return Err(CypherError::ParseError("Invalid reduce expression".to_string()));
+        return Err(CypherError::ParseError(
+            "Invalid reduce expression".to_string(),
+        ));
     }
 
     Ok(Expression::Reduce {
@@ -1322,7 +1391,11 @@ fn parse_list_comprehension(pair: pest::iterators::Pair<Rule>) -> Result<Express
     let mut map_expr = None;
 
     // Track which section we're in: list, where_pred, pipe_map
-    enum Section { List, WherePred, PipeMap }
+    enum Section {
+        List,
+        WherePred,
+        PipeMap,
+    }
     let mut section = Section::List;
 
     for inner in pair.into_inner() {
@@ -1368,14 +1441,19 @@ fn parse_list_comprehension(pair: pest::iterators::Pair<Rule>) -> Result<Express
 }
 
 fn parse_parameter(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
-    let name = pair.into_inner().next()
+    let name = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty parameter".to_string()))?
-        .as_str().to_string();
+        .as_str()
+        .to_string();
     Ok(Expression::Parameter(name))
 }
 
 fn parse_literal(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
-    let inner = pair.into_inner().next()
+    let inner = pair
+        .into_inner()
+        .next()
         .ok_or_else(|| CypherError::ParseError("Empty literal".to_string()))?;
     match inner.as_rule() {
         Rule::float => {
@@ -1448,14 +1526,21 @@ fn parse_integer_value(s: &str) -> Result<i64, CypherError> {
         (false, s)
     };
 
-    let val = if let Some(hex) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+    let val = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         i64::from_str_radix(hex, 16)
             .map_err(|e| CypherError::ParseError(format!("Invalid hex integer: {}", e)))?
-    } else if let Some(oct) = digits.strip_prefix("0o").or_else(|| digits.strip_prefix("0O")) {
+    } else if let Some(oct) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
         i64::from_str_radix(oct, 8)
             .map_err(|e| CypherError::ParseError(format!("Invalid octal integer: {}", e)))?
     } else {
-        digits.parse::<i64>()
+        digits
+            .parse::<i64>()
             .map_err(|e| CypherError::ParseError(format!("Invalid integer: {}", e)))?
     };
 
@@ -1465,7 +1550,9 @@ fn parse_integer_value(s: &str) -> Result<i64, CypherError> {
 /// Parse string content with escape sequence support.
 fn parse_string_content(s: &str) -> Result<String, CypherError> {
     if s.len() < 2 {
-        return Err(CypherError::ParseError("Invalid string literal".to_string()));
+        return Err(CypherError::ParseError(
+            "Invalid string literal".to_string(),
+        ));
     }
     // Remove outer quotes
     let quote = s.as_bytes()[0];
@@ -1490,10 +1577,12 @@ fn parse_string_content(s: &str) -> Result<String, CypherError> {
                             hex.push(h);
                         }
                     }
-                    let code = u32::from_str_radix(&hex, 16)
-                        .map_err(|_| CypherError::ParseError(format!("Invalid unicode escape: \\u{}", hex)))?;
-                    let ch = char::from_u32(code)
-                        .ok_or_else(|| CypherError::ParseError(format!("Invalid unicode codepoint: \\u{}", hex)))?;
+                    let code = u32::from_str_radix(&hex, 16).map_err(|_| {
+                        CypherError::ParseError(format!("Invalid unicode escape: \\u{}", hex))
+                    })?;
+                    let ch = char::from_u32(code).ok_or_else(|| {
+                        CypherError::ParseError(format!("Invalid unicode codepoint: \\u{}", hex))
+                    })?;
                     result.push(ch);
                 }
                 Some(other) => {
@@ -1511,9 +1600,7 @@ fn parse_string_content(s: &str) -> Result<String, CypherError> {
     Ok(result)
 }
 
-fn parse_function_invocation(
-    pair: pest::iterators::Pair<Rule>,
-) -> Result<Expression, CypherError> {
+fn parse_function_invocation(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
     let mut name = String::new();
     let mut distinct = false;
     let mut args = Vec::new();

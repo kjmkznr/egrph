@@ -1,7 +1,7 @@
+use egrph_core::{Graph, NodeId};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use egrph_core::{Graph, NodeId};
 
 pub struct CGraph {
     graph: Graph,
@@ -33,12 +33,19 @@ pub extern "C" fn graph_create_node(ptr: *mut CGraph) -> NodeId {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn graph_create_edge(ptr: *mut CGraph, label: *const c_char, src: NodeId, dst: NodeId) -> i64 {
+pub extern "C" fn graph_create_edge(
+    ptr: *mut CGraph,
+    label: *const c_char,
+    src: NodeId,
+    dst: NodeId,
+) -> i64 {
     if ptr.is_null() || label.is_null() {
         return -1;
     }
     let c_graph = unsafe { &mut *ptr };
-    let c_label = unsafe { CStr::from_ptr(label) }.to_string_lossy().into_owned();
+    let c_label = unsafe { CStr::from_ptr(label) }
+        .to_string_lossy()
+        .into_owned();
     match c_graph.graph.create_edge(c_label, src, dst, HashMap::new()) {
         Ok(id) => id as i64,
         Err(_) => -1,
@@ -74,14 +81,18 @@ pub extern "C" fn graph_execute(ptr: *mut CGraph, query: *const c_char) -> *mut 
     match c_graph.graph.execute(&q) {
         Ok(result) => {
             // Serialize the full result: {columns: [...], rows: [[...]]}
-            let rows_json: Vec<Vec<serde_json::Value>> = result.rows.iter().map(|row| {
-                row.values.iter().map(cypher_value_to_json).collect()
-            }).collect();
+            let rows_json: Vec<Vec<serde_json::Value>> = result
+                .rows
+                .iter()
+                .map(|row| row.values.iter().map(cypher_value_to_json).collect())
+                .collect();
             let output = serde_json::json!({
                 "columns": result.columns,
                 "rows": rows_json
             });
-            CString::new(output.to_string()).unwrap_or_default().into_raw()
+            CString::new(output.to_string())
+                .unwrap_or_default()
+                .into_raw()
         }
         Err(e) => {
             let err_msg = format!("{{\"error\": \"{}\"}}", e);
@@ -95,11 +106,9 @@ fn cypher_value_to_json(val: &egrph_core::CypherValue) -> serde_json::Value {
         egrph_core::CypherValue::Null => serde_json::Value::Null,
         egrph_core::CypherValue::Boolean(b) => serde_json::Value::Bool(*b),
         egrph_core::CypherValue::Integer(i) => serde_json::Value::Number((*i).into()),
-        egrph_core::CypherValue::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        egrph_core::CypherValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         egrph_core::CypherValue::String(s) => serde_json::Value::String(s.clone()),
         egrph_core::CypherValue::List(items) => {
             serde_json::Value::Array(items.iter().map(cypher_value_to_json).collect())
@@ -139,11 +148,9 @@ fn property_value_to_json(pv: &egrph_core::PropertyValue) -> serde_json::Value {
     match pv {
         egrph_core::PropertyValue::String(s) => serde_json::Value::String(s.clone()),
         egrph_core::PropertyValue::Int(i) => serde_json::Value::Number((*i).into()),
-        egrph_core::PropertyValue::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        egrph_core::PropertyValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         egrph_core::PropertyValue::Bool(b) => serde_json::Value::Bool(*b),
     }
 }

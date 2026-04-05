@@ -1,5 +1,5 @@
+use super::types::{Edge, EdgeId, Node, NodeId, PropertyValue};
 use std::collections::{HashMap, HashSet};
-use super::types::{NodeId, EdgeId, Node, Edge, PropertyValue};
 
 #[derive(Default)]
 pub struct GraphStorage {
@@ -18,7 +18,11 @@ impl GraphStorage {
         Self::default()
     }
 
-    pub fn create_node(&mut self, labels: Vec<String>, properties: HashMap<String, PropertyValue>) -> NodeId {
+    pub fn create_node(
+        &mut self,
+        labels: Vec<String>,
+        properties: HashMap<String, PropertyValue>,
+    ) -> NodeId {
         let id = self.next_node_id;
         let node = Node {
             id,
@@ -27,7 +31,10 @@ impl GraphStorage {
         };
         self.nodes.insert(id, node);
         for label in &labels {
-            self.label_index.entry(label.clone()).or_default().insert(id);
+            self.label_index
+                .entry(label.clone())
+                .or_default()
+                .insert(id);
         }
         self.next_node_id += 1;
         id
@@ -95,16 +102,11 @@ impl GraphStorage {
     pub fn match_nodes(&self, label: Option<&str>) -> Vec<&Node> {
         match label {
             None => self.nodes.values().collect(),
-            Some(l) => {
-                self.label_index
-                    .get(l)
-                    .map(|ids| {
-                        ids.iter()
-                            .filter_map(|id| self.nodes.get(id))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
+            Some(l) => self
+                .label_index
+                .get(l)
+                .map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -122,13 +124,21 @@ impl GraphStorage {
         }
     }
 
-    pub fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
+    pub fn set_node_all_properties(
+        &mut self,
+        id: NodeId,
+        properties: HashMap<String, PropertyValue>,
+    ) {
         if let Some(node) = self.nodes.get_mut(&id) {
             node.properties = properties;
         }
     }
 
-    pub fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
+    pub fn merge_node_properties(
+        &mut self,
+        id: NodeId,
+        properties: HashMap<String, PropertyValue>,
+    ) {
         if let Some(node) = self.nodes.get_mut(&id) {
             for (k, v) in properties {
                 node.properties.insert(k, v);
@@ -141,7 +151,10 @@ impl GraphStorage {
             for label in labels {
                 if !node.labels.contains(label) {
                     node.labels.push(label.clone());
-                    self.label_index.entry(label.clone()).or_default().insert(id);
+                    self.label_index
+                        .entry(label.clone())
+                        .or_default()
+                        .insert(id);
                 }
             }
         }
@@ -171,10 +184,14 @@ impl GraphStorage {
 
         // Check only edge IDs that actually exist in self.edges (adjacency lists may
         // contain stale IDs left over from earlier deletes).
-        let has_outgoing = self.outgoing.get(&id)
+        let has_outgoing = self
+            .outgoing
+            .get(&id)
             .map(|v| v.iter().any(|eid| self.edges.contains_key(eid)))
             .unwrap_or(false);
-        let has_incoming = self.incoming.get(&id)
+        let has_incoming = self
+            .incoming
+            .get(&id)
             .map(|v| v.iter().any(|eid| self.edges.contains_key(eid)))
             .unwrap_or(false);
 
@@ -256,14 +273,22 @@ impl GraphStorage {
     /// When `labels` is non-empty the label index is used to narrow the candidate
     /// set to O(|matching nodes|). When `labels` is empty **all** nodes are
     /// scanned in O(|nodes|) — avoid calling with an empty label list on large graphs.
-    pub fn find_node(&self, labels: &[String], properties: &HashMap<String, PropertyValue>) -> Option<NodeId> {
+    pub fn find_node(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Option<NodeId> {
         self.find_nodes(labels, properties).into_iter().next()
     }
 
     /// Return **all** node IDs that match the given labels and properties.
     ///
     /// MERGE needs this to apply ON MATCH to every existing matching node, not just the first.
-    pub fn find_nodes(&self, labels: &[String], properties: &HashMap<String, PropertyValue>) -> Vec<NodeId> {
+    pub fn find_nodes(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Vec<NodeId> {
         // Use the label index to narrow candidates when labels are present
         let candidates: Vec<NodeId> = if let Some(first_label) = labels.first() {
             match self.label_index.get(first_label) {
@@ -274,30 +299,44 @@ impl GraphStorage {
             self.nodes.keys().copied().collect()
         };
 
-        candidates.into_iter().filter(|id| {
-            let node = match self.nodes.get(id) {
-                Some(n) => n,
-                None => return false,
-            };
-            let labels_match = labels.iter().all(|l| node.labels.contains(l));
-            if !labels_match {
-                return false;
-            }
-            properties.iter().all(|(key, val)| {
-                node.properties.get(key).map(|v| property_values_equal(v, val)).unwrap_or(false)
+        candidates
+            .into_iter()
+            .filter(|id| {
+                let node = match self.nodes.get(id) {
+                    Some(n) => n,
+                    None => return false,
+                };
+                let labels_match = labels.iter().all(|l| node.labels.contains(l));
+                if !labels_match {
+                    return false;
+                }
+                properties.iter().all(|(key, val)| {
+                    node.properties
+                        .get(key)
+                        .map(|v| property_values_equal(v, val))
+                        .unwrap_or(false)
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// Replace all properties on an edge.
-    pub fn set_edge_all_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
+    pub fn set_edge_all_properties(
+        &mut self,
+        id: EdgeId,
+        properties: HashMap<String, PropertyValue>,
+    ) {
         if let Some(edge) = self.edges.get_mut(&id) {
             edge.properties = properties;
         }
     }
 
     /// Merge properties into an edge.
-    pub fn merge_edge_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
+    pub fn merge_edge_properties(
+        &mut self,
+        id: EdgeId,
+        properties: HashMap<String, PropertyValue>,
+    ) {
         if let Some(edge) = self.edges.get_mut(&id) {
             for (k, v) in properties {
                 edge.properties.insert(k, v);

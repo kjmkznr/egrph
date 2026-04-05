@@ -107,10 +107,7 @@ pub struct RemoveClause {
 #[derive(Debug, Clone)]
 pub enum RemoveItem {
     /// REMOVE n.prop
-    Property {
-        variable: String,
-        property: String,
-    },
+    Property { variable: String, property: String },
     /// REMOVE n:Label
     Label {
         variable: String,

@@ -1,6 +1,6 @@
 use crate::ast::{
-    NodePattern, PatternChainElement, ReturnItem, Expression, SortItem, Direction,
-    SetItem, RemoveItem, PatternElement,
+    Direction, Expression, NodePattern, PatternChainElement, PatternElement, RemoveItem,
+    ReturnItem, SetItem, SortItem,
 };
 
 #[derive(Debug, Clone)]

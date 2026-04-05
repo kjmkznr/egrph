@@ -1,11 +1,11 @@
-pub mod types;
 pub mod storage;
+pub mod types;
 
-use std::collections::HashMap;
+use self::storage::GraphStorage;
+use self::types::*;
 use crate::error::CypherError;
 use crate::executor::result::QueryResult;
-use self::types::*;
-use self::storage::GraphStorage;
+use std::collections::HashMap;
 
 pub struct Graph {
     pub(crate) storage: GraphStorage,

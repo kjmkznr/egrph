@@ -1,13 +1,17 @@
-use std::collections::HashMap;
+use super::expression::{
+    Parameters, Record, compare_values, cypher_value_to_stable_key, eval_with_params,
+};
 use crate::ast::{Expression, ReturnItem};
 use crate::error::CypherError;
 use crate::graph::storage::GraphStorage;
 use crate::graph::types::CypherValue;
-use super::expression::{Record, Parameters, eval_with_params, compare_values, cypher_value_to_stable_key};
+use std::collections::HashMap;
 
 /// Returns true if any return item contains an aggregate function call.
 pub fn items_contain_aggregation(items: &[ReturnItem]) -> bool {
-    items.iter().any(|item| expr_contains_aggregation(&item.expression))
+    items
+        .iter()
+        .any(|item| expr_contains_aggregation(&item.expression))
 }
 
 fn expr_contains_aggregation(expr: &Expression) -> bool {
@@ -15,8 +19,16 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
         Expression::FunctionCall { name, .. } => {
             matches!(
                 name.to_lowercase().as_str(),
-                "count" | "sum" | "avg" | "min" | "max" | "collect"
-                | "percentilecont" | "percentiledisc" | "stdev" | "stdevp"
+                "count"
+                    | "sum"
+                    | "avg"
+                    | "min"
+                    | "max"
+                    | "collect"
+                    | "percentilecont"
+                    | "percentiledisc"
+                    | "stdev"
+                    | "stdevp"
             )
         }
         Expression::BinaryOp { left, right, .. } => {
@@ -36,17 +48,37 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
         Expression::DynamicProperty { expr: e, key } => {
             expr_contains_aggregation(e) || expr_contains_aggregation(key)
         }
-        Expression::ListSlice { expr: e, start, end } => {
+        Expression::ListSlice {
+            expr: e,
+            start,
+            end,
+        } => {
             expr_contains_aggregation(e)
-                || start.as_ref().map(|s| expr_contains_aggregation(s)).unwrap_or(false)
-                || end.as_ref().map(|en| expr_contains_aggregation(en)).unwrap_or(false)
+                || start
+                    .as_ref()
+                    .map(|s| expr_contains_aggregation(s))
+                    .unwrap_or(false)
+                || end
+                    .as_ref()
+                    .map(|en| expr_contains_aggregation(en))
+                    .unwrap_or(false)
         }
-        Expression::Case { operand, alternatives, default } => {
-            operand.as_ref().map(|o| expr_contains_aggregation(o)).unwrap_or(false)
+        Expression::Case {
+            operand,
+            alternatives,
+            default,
+        } => {
+            operand
+                .as_ref()
+                .map(|o| expr_contains_aggregation(o))
+                .unwrap_or(false)
                 || alternatives.iter().any(|a| {
                     expr_contains_aggregation(&a.when) || expr_contains_aggregation(&a.then)
                 })
-                || default.as_ref().map(|d| expr_contains_aggregation(d)).unwrap_or(false)
+                || default
+                    .as_ref()
+                    .map(|d| expr_contains_aggregation(d))
+                    .unwrap_or(false)
         }
         Expression::RegexMatch { expr: e, pattern } => {
             expr_contains_aggregation(e) || expr_contains_aggregation(pattern)
@@ -54,16 +86,29 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
         Expression::In { expr: e, list } => {
             expr_contains_aggregation(e) || expr_contains_aggregation(list)
         }
-        Expression::ListComprehension { list, predicate, map_expr, .. } => {
+        Expression::ListComprehension {
+            list,
+            predicate,
+            map_expr,
+            ..
+        } => {
             expr_contains_aggregation(list)
-                || predicate.as_ref().map(|p| expr_contains_aggregation(p)).unwrap_or(false)
-                || map_expr.as_ref().map(|m| expr_contains_aggregation(m)).unwrap_or(false)
+                || predicate
+                    .as_ref()
+                    .map(|p| expr_contains_aggregation(p))
+                    .unwrap_or(false)
+                || map_expr
+                    .as_ref()
+                    .map(|m| expr_contains_aggregation(m))
+                    .unwrap_or(false)
         }
         Expression::Literal(_) | Expression::Variable(_) | Expression::Parameter(_) => false,
-        Expression::FilterPredicate { list, predicate, .. } => {
-            expr_contains_aggregation(list) || expr_contains_aggregation(predicate)
-        }
-        Expression::Reduce { init, list, body, .. } => {
+        Expression::FilterPredicate {
+            list, predicate, ..
+        } => expr_contains_aggregation(list) || expr_contains_aggregation(predicate),
+        Expression::Reduce {
+            init, list, body, ..
+        } => {
             expr_contains_aggregation(init)
                 || expr_contains_aggregation(list)
                 || expr_contains_aggregation(body)
@@ -82,7 +127,6 @@ pub fn execute_aggregation(
     params: &Parameters,
     storage: &GraphStorage,
 ) -> Result<Vec<Record>, CypherError> {
-
     // Separate grouping keys from aggregate items
     let group_indices: Vec<usize> = items
         .iter()
@@ -105,7 +149,12 @@ pub fn execute_aggregation(
     for rec in input_records {
         let mut key_values: Vec<CypherValue> = Vec::with_capacity(group_indices.len());
         for &i in &group_indices {
-            key_values.push(eval_with_params(&items[i].expression, rec, params, storage)?);
+            key_values.push(eval_with_params(
+                &items[i].expression,
+                rec,
+                params,
+                storage,
+            )?);
         }
 
         // Use a null byte as separator -- it cannot appear inside any
@@ -156,9 +205,18 @@ pub fn execute_aggregation(
     Ok(result)
 }
 
-fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters, storage: &GraphStorage) -> Result<CypherValue, CypherError> {
+fn compute_aggregate(
+    expr: &Expression,
+    records: &[&Record],
+    params: &Parameters,
+    storage: &GraphStorage,
+) -> Result<CypherValue, CypherError> {
     match expr {
-        Expression::FunctionCall { name, args, distinct } => {
+        Expression::FunctionCall {
+            name,
+            args,
+            distinct,
+        } => {
             let lower = name.to_lowercase();
             Ok(match lower.as_str() {
                 "count" => {
@@ -166,13 +224,15 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                         // count(*) -- count all rows
                         CypherValue::Integer(records.len() as i64)
                     } else {
-                        let vals: Vec<CypherValue> = collect_non_null_values(&args[0], records, params, *distinct, storage)?;
+                        let vals: Vec<CypherValue> =
+                            collect_non_null_values(&args[0], records, params, *distinct, storage)?;
                         CypherValue::Integer(vals.len() as i64)
                     }
                 }
                 "sum" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
+                        let vals =
+                            collect_non_null_values(arg, records, params, *distinct, storage)?;
                         return sum_values(&vals);
                     } else {
                         CypherValue::Integer(0)
@@ -180,7 +240,8 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "avg" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
+                        let vals =
+                            collect_non_null_values(arg, records, params, *distinct, storage)?;
                         avg_values(&vals)
                     } else {
                         CypherValue::Null
@@ -204,7 +265,8 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "collect" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
+                        let vals =
+                            collect_non_null_values(arg, records, params, *distinct, storage)?;
                         CypherValue::List(vals)
                     } else {
                         CypherValue::List(Vec::new())
@@ -212,7 +274,8 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "stdev" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
+                        let vals =
+                            collect_non_null_values(arg, records, params, *distinct, storage)?;
                         stdev_values(&vals, true)
                     } else {
                         CypherValue::Null
@@ -220,7 +283,8 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "stdevp" => {
                     if let Some(arg) = args.first() {
-                        let vals = collect_non_null_values(arg, records, params, *distinct, storage)?;
+                        let vals =
+                            collect_non_null_values(arg, records, params, *distinct, storage)?;
                         stdev_values(&vals, false)
                     } else {
                         CypherValue::Null
@@ -228,10 +292,12 @@ fn compute_aggregate(expr: &Expression, records: &[&Record], params: &Parameters
                 }
                 "percentilecont" | "percentiledisc" => {
                     if args.len() >= 2 {
-                        let vals = collect_non_null_values(&args[0], records, params, false, storage)?;
+                        let vals =
+                            collect_non_null_values(&args[0], records, params, false, storage)?;
                         // The percentile argument is a constant/parameter, not row-dependent;
                         // evaluate it against an empty record to avoid accidental row coupling.
-                        let percentile_val = eval_with_params(&args[1], &Record::new(), params, storage)?;
+                        let percentile_val =
+                            eval_with_params(&args[1], &Record::new(), params, storage)?;
                         if let CypherValue::Float(p) = percentile_val {
                             if lower == "percentilecont" {
                                 percentile_cont(&vals, p)
@@ -304,10 +370,9 @@ fn sum_values(vals: &[CypherValue]) -> Result<CypherValue, CypherError> {
         let mut acc: i64 = 0;
         for v in vals {
             if let CypherValue::Integer(i) = v {
-                acc = acc.checked_add(*i)
-                    .ok_or_else(|| CypherError::RuntimeError(
-                        "Integer overflow in SUM".to_string()
-                    ))?;
+                acc = acc.checked_add(*i).ok_or_else(|| {
+                    CypherError::RuntimeError("Integer overflow in SUM".to_string())
+                })?;
             }
         }
         Ok(CypherValue::Integer(acc))
@@ -327,15 +392,17 @@ fn avg_values(vals: &[CypherValue]) -> CypherValue {
 }
 
 fn min_value(vals: &[CypherValue]) -> CypherValue {
-    vals.iter().min_by(|a, b| {
-        compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal)
-    }).cloned().unwrap_or(CypherValue::Null)
+    vals.iter()
+        .min_by(|a, b| compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal))
+        .cloned()
+        .unwrap_or(CypherValue::Null)
 }
 
 fn max_value(vals: &[CypherValue]) -> CypherValue {
-    vals.iter().max_by(|a, b| {
-        compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal)
-    }).cloned().unwrap_or(CypherValue::Null)
+    vals.iter()
+        .max_by(|a, b| compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal))
+        .cloned()
+        .unwrap_or(CypherValue::Null)
 }
 
 fn stdev_values(vals: &[CypherValue], sample: bool) -> CypherValue {
@@ -350,7 +417,11 @@ fn stdev_values(vals: &[CypherValue], sample: bool) -> CypherValue {
     }
     let mean = floats.iter().sum::<f64>() / floats.len() as f64;
     let variance: f64 = floats.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
-        / if sample { (floats.len() - 1) as f64 } else { floats.len() as f64 };
+        / if sample {
+            (floats.len() - 1) as f64
+        } else {
+            floats.len() as f64
+        };
     CypherValue::Float(variance.sqrt())
 }
 

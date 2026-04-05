@@ -1,8 +1,8 @@
 pub mod plan;
 
+use self::plan::LogicalPlan;
 use crate::ast::*;
 use crate::error::CypherError;
-use self::plan::LogicalPlan;
 
 pub fn plan(stmt: &Statement) -> Result<LogicalPlan, CypherError> {
     match stmt {
@@ -37,7 +37,9 @@ fn plan_clause(clause: &Clause, input: LogicalPlan) -> Result<LogicalPlan, Cyphe
 
 fn plan_create(create: &CreateClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
     if create.pattern.parts.is_empty() {
-        return Err(CypherError::SemanticError("Empty CREATE pattern".to_string()));
+        return Err(CypherError::SemanticError(
+            "Empty CREATE pattern".to_string(),
+        ));
     }
 
     // Chain all pattern parts sequentially; each CREATE threads the previous plan as input
@@ -66,7 +68,9 @@ fn plan_create(create: &CreateClause, input: LogicalPlan) -> Result<LogicalPlan,
 
 fn plan_match(match_clause: &MatchClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
     if match_clause.pattern.parts.is_empty() {
-        return Err(CypherError::SemanticError("Empty MATCH pattern".to_string()));
+        return Err(CypherError::SemanticError(
+            "Empty MATCH pattern".to_string(),
+        ));
     }
 
     // Each comma-separated pattern part becomes a scan that is combined with
@@ -97,7 +101,10 @@ fn plan_match(match_clause: &MatchClause, input: LogicalPlan) -> Result<LogicalP
 /// `part_idx` is the 0-based index of this part within the MATCH clause pattern list and
 /// is used to generate unique anonymous variable names so multiple anonymous nodes in the
 /// same clause do not collide on `_anon`.
-fn plan_match_scan(part: &crate::ast::PatternPart, part_idx: usize) -> Result<LogicalPlan, CypherError> {
+fn plan_match_scan(
+    part: &crate::ast::PatternPart,
+    part_idx: usize,
+) -> Result<LogicalPlan, CypherError> {
     match &part.element {
         PatternElement::Node(node_pattern) => {
             let label_filter = node_pattern.labels.first().cloned();
@@ -238,7 +245,11 @@ fn plan_match_scan(part: &crate::ast::PatternPart, part_idx: usize) -> Result<Lo
 }
 
 /// Add Filter nodes for inline property constraints (e.g. `{name: "Alice"}`).
-fn add_property_filters(input: LogicalPlan, variable: &str, properties: &Option<MapLiteral>) -> LogicalPlan {
+fn add_property_filters(
+    input: LogicalPlan,
+    variable: &str,
+    properties: &Option<MapLiteral>,
+) -> LogicalPlan {
     let Some(map) = properties else {
         return input;
     };
@@ -259,10 +270,7 @@ fn add_property_filters(input: LogicalPlan, variable: &str, properties: &Option<
     current
 }
 
-fn plan_where(
-    where_clause: &WhereClause,
-    input: LogicalPlan,
-) -> Result<LogicalPlan, CypherError> {
+fn plan_where(where_clause: &WhereClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
     Ok(LogicalPlan::Filter {
         input: Box::new(input),
         predicate: where_clause.expression.clone(),
@@ -286,7 +294,9 @@ fn plan_return(
     // If so, sorting must happen AFTER projection. Otherwise sort before so
     // that ORDER BY can reference non-projected columns (e.g. ORDER BY n.age).
     let sort_after = if let Some(ref order_items) = return_clause.order_by {
-        order_items.iter().any(|item| order_item_uses_alias(&item.expression, &aliases))
+        order_items
+            .iter()
+            .any(|item| order_item_uses_alias(&item.expression, &aliases))
     } else {
         false
     };
@@ -345,10 +355,7 @@ fn order_item_uses_alias(expr: &Expression, aliases: &std::collections::HashSet<
     }
 }
 
-fn plan_with(
-    with_clause: &WithClause,
-    input: LogicalPlan,
-) -> Result<LogicalPlan, CypherError> {
+fn plan_with(with_clause: &WithClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
     let mut current = input;
 
     // WITH projection (with optional WHERE filter) — project FIRST
@@ -396,10 +403,7 @@ fn plan_unwind(
     })
 }
 
-fn plan_set(
-    set_clause: &SetClause,
-    input: LogicalPlan,
-) -> Result<LogicalPlan, CypherError> {
+fn plan_set(set_clause: &SetClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
     Ok(LogicalPlan::SetOp {
         input: Box::new(input),
         items: set_clause.items.clone(),
@@ -427,10 +431,7 @@ fn plan_delete(
     })
 }
 
-fn plan_merge(
-    merge_clause: &MergeClause,
-    input: LogicalPlan,
-) -> Result<LogicalPlan, CypherError> {
+fn plan_merge(merge_clause: &MergeClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
     if let Some(part) = merge_clause.pattern.parts.first() {
         Ok(LogicalPlan::MergeOp {
             input: Box::new(input),
@@ -439,6 +440,8 @@ fn plan_merge(
             on_match: merge_clause.on_match.clone(),
         })
     } else {
-        Err(CypherError::SemanticError("Empty MERGE pattern".to_string()))
+        Err(CypherError::SemanticError(
+            "Empty MERGE pattern".to_string(),
+        ))
     }
 }
