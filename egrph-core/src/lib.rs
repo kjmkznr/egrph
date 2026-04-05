@@ -1349,13 +1349,21 @@ mod tests {
     fn test_match_after_separate_create_queries() {
         // Reproduces: CREATE in one execute() call, then MATCH relationship in another.
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: \"Alice\", age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: \"Bob\", age: 25})").unwrap();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
 
         // Verify MATCH alone finds both nodes first
         assert_eq!(g.node_count(), 2, "should have Alice and Bob in storage");
-        let match_single = g.execute("MATCH (a:Person {name: \"Alice\"}) RETURN a.name").unwrap();
-        assert_eq!(match_single.rows.len(), 1, "single-node MATCH should find Alice");
+        let match_single = g
+            .execute("MATCH (a:Person {name: \"Alice\"}) RETURN a.name")
+            .unwrap();
+        assert_eq!(
+            match_single.rows.len(),
+            1,
+            "single-node MATCH should find Alice"
+        );
         let match_only = g
             .execute("MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) RETURN a.name, b.name")
             .unwrap();

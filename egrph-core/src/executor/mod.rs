@@ -551,8 +551,7 @@ fn execute_create_path(
                     n.id
                 } else {
                     let labels = elem.node.labels.clone();
-                    let props =
-                        resolve_map_literal_to_properties(&elem.node.properties, params)?;
+                    let props = resolve_map_literal_to_properties(&elem.node.properties, params)?;
                     let id = storage.create_node(labels, props);
                     let node = storage
                         .get_node(id)
