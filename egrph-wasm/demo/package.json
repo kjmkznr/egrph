@@ -1,0 +1,9 @@
+{
+  "name": "egrph-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx serve . --cors -l 8080",
+    "build-wasm": "wasm-pack build --target web .."
+  }
+}

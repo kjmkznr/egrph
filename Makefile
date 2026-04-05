@@ -1,6 +1,6 @@
 .PHONY: all build test setup check-wasm-pack \
         build-wasm build-wasm-web build-wasm-node \
-        test-wasm test-wasm-node clean
+        test-wasm test-wasm-node demo clean
 
 # PATH that prefers rustup-managed toolchain (required for WASM targets)
 RUSTUP_CARGO_BIN := $(HOME)/.cargo/bin
@@ -98,6 +98,17 @@ test-wasm-node: check-wasm-pack
 # Run WASM tests in headless Chrome (requires chromedriver)
 test-wasm: check-wasm-pack
 	wasm-pack test egrph-wasm --headless --chrome
+
+# Build WASM (web target) and launch demo server at http://localhost:8080/demo/
+demo: check-wasm-pack
+	wasm-pack build egrph-wasm \
+		--release \
+		--target web \
+		--out-dir pkg \
+		--out-name egrph_wasm
+	@echo ""
+	@echo "==> Open http://localhost:8080/demo/ in your browser"
+	cd egrph-wasm && python3 -m http.server 8080
 
 clean:
 	cargo clean
