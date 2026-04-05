@@ -80,7 +80,7 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-wasm-
       - name: Run WASM tests
-        run: wasm-pack test egrph-wasm --node
+        run: wasm-pack test --node egrph-wasm
 
   # ── Goバインディングテスト ────────────────────────────────────────────
   test-go:

@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/kjmkznr/egrph"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 egrph-core = { path = "../egrph-core" }
