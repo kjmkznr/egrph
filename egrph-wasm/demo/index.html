@@ -483,25 +483,11 @@ SKIP 1 LIMIT 2`
       },
     ];
 
-    const SEED_QUERY = `CREATE (:Person {name: "Alice", age: 30})
-CREATE (:Person {name: "Bob", age: 25})
-CREATE (:Person {name: "Carol", age: 35})
-CREATE (:City {name: "Tokyo"})
-CREATE (:City {name: "Osaka"})`;
-
     let graph = null;
 
     async function main() {
       await init();
       graph = new WasmGraph();
-
-      // Seed initial data
-      graph.execute(SEED_QUERY);
-
-      // Wire up relationships example
-      graph.execute(`MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[:KNOWS]->(b)`);
-      graph.execute(`MATCH (a:Person {name: "Bob"}), (b:Person {name: "Carol"}) CREATE (a)-[:KNOWS]->(b)`);
-      graph.execute(`MATCH (p:Person {name: "Alice"}), (c:City {name: "Tokyo"}) CREATE (p)-[:LIVES_IN]->(c)`);
 
       updateStats();
 
@@ -521,10 +507,6 @@ CREATE (:City {name: "Osaka"})`;
 
       document.getElementById('reset-btn').addEventListener('click', () => {
         graph = new WasmGraph();
-        graph.execute(SEED_QUERY);
-        graph.execute(`MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[:KNOWS]->(b)`);
-        graph.execute(`MATCH (a:Person {name: "Bob"}), (b:Person {name: "Carol"}) CREATE (a)-[:KNOWS]->(b)`);
-        graph.execute(`MATCH (p:Person {name: "Alice"}), (c:City {name: "Tokyo"}) CREATE (p)-[:LIVES_IN]->(c)`);
         updateStats();
         showWelcome();
       });
@@ -558,8 +540,9 @@ CREATE (:City {name: "Osaka"})`;
     function showWelcome() {
       document.getElementById('results-content').innerHTML = `
         <div class="welcome-box">
-          <p>Graph initialized with <strong>sample data</strong>: 3 Person nodes, 2 City nodes, and relationships.</p>
-          <p>Select an example from the sidebar, or write your own Cypher query above and press <strong>Run</strong>.</p>
+          <p>Graph is <strong>empty</strong>. Start by clicking <em>Create nodes</em> in the sidebar to add data.</p>
+          <p>Run examples in order: create nodes → create relationships → match and query.</p>
+          <p>Press <strong>Run</strong> or <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to execute a query. Use <strong>Reset graph</strong> to start over.</p>
         </div>`;
       document.getElementById('result-tag').innerHTML = '';
       document.getElementById('result-meta').textContent = '';

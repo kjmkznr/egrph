@@ -94,6 +94,18 @@ mod tests {
     // --- Phase 1 tests ---
 
     #[test]
+    fn test_create_multiple_nodes_in_one_query() {
+        let mut g = Graph::new();
+        g.execute(
+            "CREATE (:Person {name: \"Alice\", age: 30})\n\
+             CREATE (:Person {name: \"Bob\", age: 25})\n\
+             CREATE (:Person {name: \"Carol\", age: 35})",
+        )
+        .unwrap();
+        assert_eq!(g.node_count(), 3);
+    }
+
+    #[test]
     fn test_create_relationship() {
         let mut g = Graph::new();
         let result = g
