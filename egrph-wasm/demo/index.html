@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>egrph — Graph Database Demo</title>
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"
+          integrity="sha384-IWROdLKRsN1UuJywMlWl7/blXQ8GEooN2n7dzTxfEPd7ybYIKCUJ2Ol/1Gpf3YV4"
+          crossorigin="anonymous"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -38,6 +41,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-shrink: 0;
     }
 
     .logo {
@@ -60,34 +64,21 @@
       font-family: var(--font-mono);
     }
 
-    .header-right {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
 
-    .stats {
-      display: flex;
-      gap: 16px;
-      font-size: 13px;
-      font-family: var(--font-mono);
-    }
-
+    .stats { display: flex; gap: 16px; font-size: 13px; font-family: var(--font-mono); }
     .stat { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
     .stat-value { color: var(--accent); font-weight: 600; }
 
     main {
       flex: 1;
       display: grid;
-      grid-template-columns: 280px 1fr;
-      grid-template-rows: 1fr;
-      gap: 0;
+      grid-template-columns: 260px 1fr;
       overflow: hidden;
       height: calc(100vh - 57px);
     }
 
-    /* Sidebar */
+    /* ── Sidebar ── */
     .sidebar {
       background: var(--surface);
       border-right: 1px solid var(--border);
@@ -125,11 +116,7 @@
       white-space: pre-wrap;
       word-break: break-all;
     }
-
-    .example-btn:hover {
-      border-color: var(--accent);
-      background: #1e2235;
-    }
+    .example-btn:hover { border-color: var(--accent); background: #1e2235; }
 
     .example-label {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -149,10 +136,9 @@
       font-size: 12px;
       transition: border-color 0.15s, color 0.15s;
     }
-
     .reset-btn:hover { border-color: var(--red); color: var(--red); }
 
-    /* Editor + Results */
+    /* ── Workspace ── */
     .workspace {
       display: flex;
       flex-direction: column;
@@ -165,6 +151,7 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+      flex-shrink: 0;
     }
 
     .editor-header {
@@ -195,7 +182,6 @@
       gap: 6px;
       transition: opacity 0.15s;
     }
-
     .run-btn:hover { opacity: 0.85; }
     .run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -214,14 +200,9 @@
       outline: none;
       transition: border-color 0.15s;
     }
-
     textarea:focus { border-color: var(--accent); }
 
-    .shortcut-hint {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
+    .shortcut-hint { font-size: 11px; color: var(--text-muted); }
     kbd {
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -231,10 +212,56 @@
       font-size: 10px;
     }
 
-    /* Results */
-    .results-area {
+    /* ── Bottom: tabs + panels ── */
+    .bottom-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tab-bar {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      padding: 0 16px;
+      gap: 0;
+    }
+
+    .tab-btn {
+      padding: 10px 16px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .tab-meta {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+    }
+
+    .panel {
       flex: 1;
       overflow: auto;
+      display: none;
+    }
+    .panel.active { display: flex; flex-direction: column; }
+
+    /* Results panel */
+    .results-inner {
       padding: 16px;
     }
 
@@ -245,40 +272,16 @@
       margin-bottom: 12px;
     }
 
-    .results-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
+    .result-meta { font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); }
 
-    .result-meta {
-      font-size: 11px;
-      font-family: var(--font-mono);
-      color: var(--text-muted);
-    }
-
-    .result-tag {
-      font-size: 11px;
-      padding: 1px 8px;
-      border-radius: 10px;
-      font-family: var(--font-mono);
-    }
-
-    .tag-ok { background: rgba(52,211,153,0.15); color: var(--green); border: 1px solid rgba(52,211,153,0.3); }
-    .tag-err { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
+    .result-tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; font-family: var(--font-mono); }
+    .tag-ok  { background: rgba(52,211,153,0.15); color: var(--green); border: 1px solid rgba(52,211,153,0.3); }
+    .tag-err { background: rgba(248,113,113,0.15); color: var(--red);   border: 1px solid rgba(248,113,113,0.3); }
     .tag-empty { background: rgba(251,191,36,0.1); color: var(--yellow); border: 1px solid rgba(251,191,36,0.2); }
 
     .result-table-wrap { overflow-x: auto; }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      font-family: var(--font-mono);
-    }
-
+    table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: var(--font-mono); }
     th {
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -289,7 +292,6 @@
       letter-spacing: 0.04em;
       white-space: nowrap;
     }
-
     td {
       border: 1px solid var(--border);
       padding: 8px 12px;
@@ -297,7 +299,6 @@
       vertical-align: top;
       max-width: 400px;
     }
-
     tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
     tr:hover td { background: rgba(108,142,247,0.06); }
 
@@ -313,7 +314,6 @@
       font-size: 13px;
       line-height: 1.5;
     }
-
     .empty-box {
       background: rgba(251,191,36,0.05);
       border: 1px dashed rgba(251,191,36,0.25);
@@ -323,7 +323,6 @@
       text-align: center;
       font-size: 13px;
     }
-
     .welcome-box {
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -333,7 +332,6 @@
       font-size: 14px;
       line-height: 1.7;
     }
-
     .welcome-box p + p { margin-top: 8px; }
 
     .loading-box {
@@ -344,7 +342,6 @@
       gap: 10px;
       padding: 12px 0;
     }
-
     .spinner {
       width: 18px; height: 18px;
       border: 2px solid var(--border);
@@ -353,7 +350,6 @@
       animation: spin 0.7s linear infinite;
       flex-shrink: 0;
     }
-
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .object-cell {
@@ -368,14 +364,41 @@
       overflow-x: auto;
       white-space: pre;
     }
-
     .string-val { color: #86efac; }
     .number-val { color: #93c5fd; }
     .bool-val   { color: #fca5a5; }
 
+    /* Graph panel */
+    #cy {
+      flex: 1;
+      background: var(--bg);
+    }
+
+    .graph-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* Fit button */
+    .fit-btn {
+      padding: 4px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .fit-btn:hover { border-color: var(--accent); color: var(--accent); }
+
     @media (max-width: 700px) {
-      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-      .sidebar { max-height: 220px; }
+      main { grid-template-columns: 1fr; }
+      .sidebar { max-height: 200px; overflow-y: auto; }
     }
   </style>
 </head>
@@ -398,7 +421,7 @@
         <div id="examples-list"></div>
       </div>
       <div class="sidebar-section">
-        <h3>Graph</h3>
+        <h3>Database</h3>
         <button class="reset-btn" id="reset-btn">Reset graph</button>
       </div>
     </div>
@@ -418,16 +441,32 @@
         <textarea id="query-input" rows="4" placeholder="MATCH (n) RETURN n LIMIT 5" spellcheck="false"></textarea>
       </div>
 
-      <div class="results-area">
-        <div class="results-header">
-          <span class="results-label">Results</span>
-          <span id="result-tag"></span>
-          <span class="result-meta" id="result-meta"></span>
+      <div class="bottom-area">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="results">Results</button>
+          <button class="tab-btn" data-tab="graph">Graph</button>
+          <div class="tab-meta">
+            <span id="result-tag"></span>
+            <span class="result-meta" id="result-meta"></span>
+            <button class="fit-btn" id="fit-btn" style="display:none">Fit</button>
+          </div>
         </div>
-        <div id="results-content">
-          <div class="loading-box">
-            <div class="spinner"></div>
-            Loading WASM module…
+
+        <div class="panel active" id="panel-results">
+          <div class="results-inner">
+            <div id="results-content">
+              <div class="loading-box">
+                <div class="spinner"></div>
+                Loading WASM module…
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="panel-graph">
+          <div id="cy"></div>
+          <div class="graph-empty" id="graph-empty" style="display:none">
+            No nodes in the graph yet.
           </div>
         </div>
       </div>
@@ -483,21 +522,173 @@ SKIP 1 LIMIT 2`
       },
     ];
 
+    // ── Label → color palette ──────────────────────────────────────────────
+    const PALETTE = [
+      '#6c8ef7', '#a78bfa', '#34d399', '#f87171',
+      '#fbbf24', '#38bdf8', '#fb923c', '#e879f9',
+    ];
+    const labelColors = new Map();
+    let paletteIdx = 0;
+    function colorForLabel(label) {
+      if (!labelColors.has(label)) {
+        labelColors.set(label, PALETTE[paletteIdx % PALETTE.length]);
+        paletteIdx++;
+      }
+      return labelColors.get(label);
+    }
+
+    // ── Cytoscape setup ────────────────────────────────────────────────────
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      style: [
+        {
+          selector: 'node',
+          style: {
+            'background-color': 'data(color)',
+            'label': 'data(displayLabel)',
+            'color': '#fff',
+            'text-valign': 'center',
+            'text-halign': 'center',
+            'font-size': '11px',
+            'font-family': 'ui-monospace, monospace',
+            'width': 48,
+            'height': 48,
+            'text-wrap': 'wrap',
+            'text-max-width': '60px',
+            'border-width': 2,
+            'border-color': 'data(borderColor)',
+          }
+        },
+        {
+          selector: 'node:selected',
+          style: {
+            'border-width': 3,
+            'border-color': '#fff',
+          }
+        },
+        {
+          selector: 'edge',
+          style: {
+            'width': 2,
+            'line-color': '#4a5568',
+            'target-arrow-color': '#4a5568',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'label': 'data(label)',
+            'font-size': '10px',
+            'font-family': 'ui-monospace, monospace',
+            'color': '#8892a4',
+            'text-background-color': '#0f1117',
+            'text-background-opacity': 1,
+            'text-background-padding': '2px',
+          }
+        },
+        {
+          selector: 'edge:selected',
+          style: {
+            'line-color': '#6c8ef7',
+            'target-arrow-color': '#6c8ef7',
+            'color': '#e2e8f0',
+          }
+        },
+      ],
+      layout: { name: 'preset' },
+      wheelSensitivity: 0.3,
+    });
+
+    // ── Tab switching ──────────────────────────────────────────────────────
+    const fitBtn = document.getElementById('fit-btn');
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+        fitBtn.style.display = btn.dataset.tab === 'graph' ? '' : 'none';
+        if (btn.dataset.tab === 'graph') cy.resize();
+      });
+    });
+    fitBtn.addEventListener('click', () => cy.fit(undefined, 32));
+
+    // ── Graph refresh ──────────────────────────────────────────────────────
+    function refreshGraph() {
+      if (!graph) return;
+
+      let allNodes = [], allEdges = [];
+      try {
+        const nodesJson = graph.execute('MATCH (n) RETURN n');
+        allNodes = JSON.parse(nodesJson);
+      } catch (_) {}
+      try {
+        const edgesJson = graph.execute('MATCH ()-[r]->() RETURN r');
+        allEdges = JSON.parse(edgesJson);
+      } catch (_) {}
+
+      const elements = [];
+
+      for (const row of allNodes) {
+        const n = row.n;
+        const label = (n._labels && n._labels[0]) || '';
+        const name = (n._properties && n._properties.name) || label || n._id;
+        const color = colorForLabel(label);
+        elements.push({
+          data: {
+            id: n._id,
+            displayLabel: name + (label ? '\n:' + label : ''),
+            nodeLabel: label,
+            color,
+            borderColor: color,
+          }
+        });
+      }
+
+      for (const row of allEdges) {
+        const r = row.r;
+        elements.push({
+          data: {
+            id: 'e' + r._id,
+            source: r._src,
+            target: r._dst,
+            label: r._type,
+          }
+        });
+      }
+
+      const graphEmpty = document.getElementById('graph-empty');
+      if (elements.filter(e => !e.data.source).length === 0) {
+        cy.elements().remove();
+        graphEmpty.style.display = '';
+        return;
+      }
+      graphEmpty.style.display = 'none';
+
+      cy.elements().remove();
+      cy.add(elements);
+      cy.layout({
+        name: 'cose',
+        animate: true,
+        animationDuration: 400,
+        nodeRepulsion: 6000,
+        idealEdgeLength: 120,
+        fit: true,
+        padding: 32,
+      }).run();
+    }
+
+    // ── State ──────────────────────────────────────────────────────────────
     let graph = null;
 
     async function main() {
       await init();
       graph = new WasmGraph();
-
       updateStats();
 
-      const runBtn = document.getElementById('run-btn');
-      runBtn.disabled = false;
-
+      document.getElementById('run-btn').disabled = false;
       showWelcome();
       buildExamples();
+      refreshGraph();
 
-      runBtn.addEventListener('click', runQuery);
+      document.getElementById('run-btn').addEventListener('click', runQuery);
       document.getElementById('query-input').addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
           e.preventDefault();
@@ -507,8 +698,11 @@ SKIP 1 LIMIT 2`
 
       document.getElementById('reset-btn').addEventListener('click', () => {
         graph = new WasmGraph();
+        labelColors.clear();
+        paletteIdx = 0;
         updateStats();
         showWelcome();
+        refreshGraph();
       });
     }
 
@@ -540,9 +734,9 @@ SKIP 1 LIMIT 2`
     function showWelcome() {
       document.getElementById('results-content').innerHTML = `
         <div class="welcome-box">
-          <p>Graph is <strong>empty</strong>. Start by clicking <em>Create nodes</em> in the sidebar to add data.</p>
+          <p>Graph is <strong>empty</strong>. Start by clicking <em>Create nodes</em> in the sidebar.</p>
           <p>Run examples in order: create nodes → create relationships → match and query.</p>
-          <p>Press <strong>Run</strong> or <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to execute a query. Use <strong>Reset graph</strong> to start over.</p>
+          <p>Press <strong>Run</strong> or <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to execute. Use <strong>Reset graph</strong> to start over.</p>
         </div>`;
       document.getElementById('result-tag').innerHTML = '';
       document.getElementById('result-meta').textContent = '';
@@ -558,12 +752,13 @@ SKIP 1 LIMIT 2`
         const json = graph.execute(query);
         rows = JSON.parse(json);
         updateStats();
+        refreshGraph();
       } catch (e) {
         error = String(e);
       }
       const elapsed = (performance.now() - t0).toFixed(1);
 
-      const tagEl = document.getElementById('result-tag');
+      const tagEl  = document.getElementById('result-tag');
       const metaEl = document.getElementById('result-meta');
       const content = document.getElementById('results-content');
 
@@ -589,27 +784,22 @@ SKIP 1 LIMIT 2`
       const tbody = rows.map(row =>
         `<tr>${cols.map(col => `<td>${renderValue(row[col])}</td>`).join('')}</tr>`
       ).join('');
-
       content.innerHTML = `<div class="result-table-wrap"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
     }
 
     function renderValue(v) {
       if (v === null || v === undefined) return `<span class="null-val">null</span>`;
       if (typeof v === 'boolean') return `<span class="bool-val">${v}</span>`;
-      if (typeof v === 'number') return `<span class="number-val">${v}</span>`;
-      if (typeof v === 'string') return `<span class="string-val">&quot;${escHtml(v)}&quot;</span>`;
-      if (typeof v === 'object') {
-        return `<span class="object-cell">${escHtml(JSON.stringify(v, null, 2))}</span>`;
-      }
+      if (typeof v === 'number')  return `<span class="number-val">${v}</span>`;
+      if (typeof v === 'string')  return `<span class="string-val">&quot;${escHtml(v)}&quot;</span>`;
+      if (typeof v === 'object')  return `<span class="object-cell">${escHtml(JSON.stringify(v, null, 2))}</span>`;
       return escHtml(String(v));
     }
 
     function escHtml(s) {
       return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     main().catch(err => {
