@@ -92,4 +92,4 @@ go test .
 ```
 
 ## ライセンス
-[MIT License](LICENSE) (またはプロジェクトに適したライセンス)
+[MIT License](LICENSE)
