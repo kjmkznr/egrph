@@ -1,4 +1,5 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
 
 // Top-level query: sequence of clauses
 query = { SOI ~ clause+ ~ EOI }
