@@ -138,7 +138,9 @@ fn format_properties(props: &HashMap<String, PropertyValue>) -> String {
         .iter()
         .map(|k| {
             let v = match &props[*k] {
-                PropertyValue::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+                PropertyValue::String(s) => {
+                    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+                }
                 PropertyValue::Int(i) => i.to_string(),
                 PropertyValue::Float(f) => {
                     if f.fract() == 0.0 {
