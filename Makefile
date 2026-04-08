@@ -1,6 +1,6 @@
 .PHONY: all build test setup check-wasm-pack \
         build-wasm build-wasm-web build-wasm-node \
-        test-wasm test-wasm-node demo clean
+        test-wasm test-wasm-node demo clean publish-wasm
 
 # PATH that prefers rustup-managed toolchain (required for WASM targets)
 RUSTUP_CARGO_BIN := $(HOME)/.cargo/bin
@@ -70,7 +70,11 @@ build-wasm: check-wasm-pack
 		--release \
 		--target bundler \
 		--out-dir pkg \
-		--out-name egrph_wasm
+		--out-name egrph_wasm \
+		--scope kjmkznr
+
+publish-wasm: build-wasm
+	cd egrph-wasm/pkg && npm publish
 
 # Web target (direct browser ESM, no bundler) — output: egrph-wasm/pkg-web/
 build-wasm-web: check-wasm-pack

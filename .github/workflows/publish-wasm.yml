@@ -1,0 +1,61 @@
+name: Publish egrph-wasm
+
+on:
+  push:
+    tags:
+      - 'wasm-v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish @kjmkznr/egrph-wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@kjmkznr'
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#wasm-v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Patch version in Cargo.toml
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ steps.version.outputs.version }}\"/" egrph-wasm/Cargo.toml
+
+      - name: Build WASM package
+        run: |
+          wasm-pack build egrph-wasm \
+            --release \
+            --target bundler \
+            --out-dir pkg \
+            --out-name egrph_wasm \
+            --scope kjmkznr
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        working-directory: egrph-wasm/pkg
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
