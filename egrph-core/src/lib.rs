@@ -1379,4 +1379,67 @@ mod tests {
             .unwrap();
         assert_eq!(result.rows.len(), 1);
     }
+
+    #[test]
+    fn test_export_cypher_empty() {
+        let g = Graph::new();
+        assert_eq!(g.export_cypher(), "");
+    }
+
+    #[test]
+    fn test_export_cypher_nodes_only() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+
+        let cypher = g.export_cypher();
+        assert!(cypher.starts_with("CREATE\n"));
+        assert!(cypher.contains(":Person"));
+        assert!(cypher.contains("name: \"Alice\""));
+        assert!(cypher.contains("age: 30"));
+        assert!(cypher.contains("name: \"Bob\""));
+        assert!(cypher.contains("age: 25"));
+    }
+
+    #[test]
+    fn test_export_cypher_with_edges() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\"})").unwrap();
+        g.execute(
+            "MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+
+        let cypher = g.export_cypher();
+        assert!(cypher.contains("-[:KNOWS]->"));
+    }
+
+    #[test]
+    fn test_export_cypher_roundtrip() {
+        let mut g1 = Graph::new();
+        g1.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g1.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g1.execute(
+            "MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+
+        let cypher = g1.export_cypher();
+
+        let mut g2 = Graph::new();
+        g2.execute(&cypher).unwrap();
+
+        assert_eq!(g2.node_count(), 2);
+        assert_eq!(g2.edge_count(), 1);
+
+        let result = g2
+            .execute("MATCH (p:Person) RETURN p.name ORDER BY p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
 }

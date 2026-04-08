@@ -81,6 +81,15 @@ impl WasmGraph {
     pub fn edge_count(&self) -> u32 {
         self.inner.edge_count().min(u32::MAX as usize) as u32
     }
+
+    /// Export the entire graph as a Cypher CREATE statement string.
+    ///
+    /// The returned string can be passed back to `execute()` to recreate the graph.
+    /// Returns an empty string if the graph has no nodes.
+    #[wasm_bindgen(js_name = exportCypher)]
+    pub fn export_cypher(&self) -> String {
+        self.inner.export_cypher()
+    }
 }
 
 fn cypher_value_to_json(val: &CypherValue) -> Result<serde_json::Value, JsValue> {
@@ -253,6 +262,30 @@ mod tests {
         assert!(rel["_src"].is_string());
         assert!(rel["_dst"].is_string());
         assert_eq!(rel["_type"], "KNOWS");
+    }
+
+    #[wasm_bindgen_test]
+    fn test_export_cypher() {
+        let mut g = WasmGraph::new();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+            .unwrap();
+        g.execute(
+            "MATCH (a:Person {name: \"Alice\"}), (b:Person {name: \"Bob\"}) CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+
+        let cypher = g.export_cypher();
+        assert!(cypher.starts_with("CREATE\n"));
+        assert!(cypher.contains(":Person"));
+        assert!(cypher.contains("-[:KNOWS]->"));
+
+        // Roundtrip: recreate from exported Cypher
+        let mut g2 = WasmGraph::new();
+        g2.execute(&cypher).unwrap();
+        assert_eq!(g2.node_count(), 2);
+        assert_eq!(g2.edge_count(), 1);
     }
 
     #[wasm_bindgen_test]

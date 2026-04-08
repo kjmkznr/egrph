@@ -86,4 +86,71 @@ impl Graph {
     pub fn edge_count(&self) -> usize {
         self.storage.edge_count()
     }
+
+    /// Export the entire graph as a Cypher CREATE statement that can be used to recreate it.
+    pub fn export_cypher(&self) -> String {
+        if self.storage.nodes.is_empty() {
+            return String::new();
+        }
+
+        let mut parts: Vec<String> = Vec::new();
+
+        let mut node_ids: Vec<NodeId> = self.storage.nodes.keys().copied().collect();
+        node_ids.sort();
+
+        for id in &node_ids {
+            let node = &self.storage.nodes[id];
+            let var = format!("_{}", id);
+            let labels = if node.labels.is_empty() {
+                String::new()
+            } else {
+                format!(":{}", node.labels.join(":"))
+            };
+            let props = format_properties(&node.properties);
+            parts.push(format!("({var}{labels}{props})"));
+        }
+
+        let mut edge_ids: Vec<EdgeId> = self.storage.edges.keys().copied().collect();
+        edge_ids.sort();
+
+        for id in &edge_ids {
+            let edge = &self.storage.edges[id];
+            let src_var = format!("_{}", edge.src);
+            let dst_var = format!("_{}", edge.dst);
+            let props = format_properties(&edge.properties);
+            parts.push(format!(
+                "({src_var})-[:{label}{props}]->({dst_var})",
+                label = edge.label
+            ));
+        }
+
+        format!("CREATE\n  {}", parts.join(",\n  "))
+    }
+}
+
+fn format_properties(props: &HashMap<String, PropertyValue>) -> String {
+    if props.is_empty() {
+        return String::new();
+    }
+    let mut keys: Vec<&String> = props.keys().collect();
+    keys.sort();
+    let entries: Vec<String> = keys
+        .iter()
+        .map(|k| {
+            let v = match &props[*k] {
+                PropertyValue::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+                PropertyValue::Int(i) => i.to_string(),
+                PropertyValue::Float(f) => {
+                    if f.fract() == 0.0 {
+                        format!("{f:.1}")
+                    } else {
+                        f.to_string()
+                    }
+                }
+                PropertyValue::Bool(b) => b.to_string(),
+            };
+            format!("{k}: {v}")
+        })
+        .collect();
+    format!(" {{{}}}", entries.join(", "))
 }
