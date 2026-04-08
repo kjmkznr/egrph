@@ -72,6 +72,10 @@ impl PyGraph {
         self.inner.edge_count()
     }
 
+    fn export_cypher(&self) -> String {
+        self.inner.export_cypher()
+    }
+
     fn execute(&mut self, query: &str) -> PyResult<String> {
         let result = self
             .inner

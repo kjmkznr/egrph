@@ -171,7 +171,21 @@ fn property_value_to_json(pv: &egrph_core::PropertyValue) -> serde_json::Value {
 }
 
 /// # Safety
-/// `s` must be a pointer previously returned by `graph_execute`, or null.
+/// `ptr` must be a valid pointer returned by `graph_new`, or null.
+/// The returned pointer must be freed with `graph_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn graph_export_cypher(ptr: *const CGraph) -> *mut c_char {
+    if ptr.is_null() {
+        return CString::new("").unwrap_or_default().into_raw();
+    }
+    let c_graph = unsafe { &*ptr };
+    CString::new(c_graph.graph.export_cypher())
+        .unwrap_or_default()
+        .into_raw()
+}
+
+/// # Safety
+/// `s` must be a pointer previously returned by `graph_execute` or `graph_export_cypher`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn graph_free_string(s: *mut c_char) {
     if !s.is_null() {

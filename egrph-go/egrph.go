@@ -12,6 +12,8 @@ unsigned long long graph_create_node(CGraph* ptr);
 long long graph_create_edge(CGraph* ptr, const char* label, unsigned long long src, unsigned long long dst);
 size_t graph_get_node_count(const CGraph* ptr);
 size_t graph_get_edge_count(const CGraph* ptr);
+char* graph_export_cypher(const CGraph* ptr);
+void graph_free_string(char* s);
 */
 import "C"
 import "unsafe"
@@ -44,4 +46,10 @@ func (g *Graph) GetNodeCount() int {
 
 func (g *Graph) GetEdgeCount() int {
 	return int(C.graph_get_edge_count(g.ptr))
+}
+
+func (g *Graph) ExportCypher() string {
+	cStr := C.graph_export_cypher(g.ptr)
+	defer C.graph_free_string(cStr)
+	return C.GoString(cStr)
 }
