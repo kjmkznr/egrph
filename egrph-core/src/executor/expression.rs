@@ -527,7 +527,11 @@ fn resolve_slice_index(val: Option<&CypherValue>, len: i64, default: i64) -> i64
     match val {
         None => default,
         Some(CypherValue::Integer(i)) => {
-            if *i < 0 { (len + *i).max(0) } else { (*i).min(len) }
+            if *i < 0 {
+                (len + *i).max(0)
+            } else {
+                (*i).min(len)
+            }
         }
         _ => default,
     }

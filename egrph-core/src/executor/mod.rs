@@ -454,7 +454,10 @@ fn sync_node_in_record(rec: &mut Record, variable: &str, node_id: NodeId, storag
 /// Re-reads an edge from storage after modification and updates its binding in the record.
 fn sync_edge_in_record(rec: &mut Record, variable: &str, edge_id: EdgeId, storage: &GraphStorage) {
     if let Some(updated) = storage.get_edge(edge_id) {
-        rec.insert(variable.to_string(), CypherValue::Relationship(updated.clone()));
+        rec.insert(
+            variable.to_string(),
+            CypherValue::Relationship(updated.clone()),
+        );
     }
 }
 
