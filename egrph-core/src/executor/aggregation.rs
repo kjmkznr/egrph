@@ -157,13 +157,15 @@ pub fn execute_aggregation(
             )?);
         }
 
-        // Use a null byte as separator -- it cannot appear inside any
-        // cypher_value_to_stable_key output, so there is no collision risk.
-        let key_str = key_values
-            .iter()
-            .map(cypher_value_to_stable_key)
-            .collect::<Vec<_>>()
-            .join("\x00");
+        // Build the group key string without an intermediate Vec allocation.
+        // Null byte separator cannot appear in cypher_value_to_stable_key output.
+        let mut key_str = String::new();
+        for kv in &key_values {
+            if !key_str.is_empty() {
+                key_str.push('\x00');
+            }
+            key_str.push_str(&cypher_value_to_stable_key(kv));
+        }
 
         let idx = if let Some(&existing) = group_key_map.get(&key_str) {
             existing
