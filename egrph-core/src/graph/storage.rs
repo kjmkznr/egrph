@@ -99,6 +99,16 @@ impl GraphStorage {
             .unwrap_or_default()
     }
 
+    /// Return the raw outgoing edge ID slice for a node — no allocation.
+    pub fn outgoing_edge_ids(&self, node_id: NodeId) -> &[EdgeId] {
+        self.outgoing.get(&node_id).map_or(&[], |v| v.as_slice())
+    }
+
+    /// Return the raw incoming edge ID slice for a node — no allocation.
+    pub fn incoming_edge_ids(&self, node_id: NodeId) -> &[EdgeId] {
+        self.incoming.get(&node_id).map_or(&[], |v| v.as_slice())
+    }
+
     pub fn match_nodes(&self, label: Option<&str>) -> Vec<&Node> {
         match label {
             None => self.nodes.values().collect(),
@@ -205,16 +215,13 @@ impl GraphStorage {
         if detach {
             // Collect all edge IDs incident to this node (outgoing + incoming),
             // deduplicating to handle self-loops correctly.
-            let mut edge_ids: Vec<EdgeId> = Vec::new();
+            // Use HashSet for O(E) deduplication instead of O(E²) Vec::contains.
+            let mut edge_ids: HashSet<EdgeId> = HashSet::new();
             if let Some(out) = self.outgoing.get(&id) {
                 edge_ids.extend(out.iter().copied());
             }
             if let Some(inc) = self.incoming.get(&id) {
-                for eid in inc {
-                    if !edge_ids.contains(eid) {
-                        edge_ids.push(*eid);
-                    }
-                }
+                edge_ids.extend(inc.iter().copied());
             }
 
             for eid in edge_ids {
@@ -231,9 +238,6 @@ impl GraphStorage {
                     }
                 }
             }
-
-            self.outgoing.remove(&id);
-            self.incoming.remove(&id);
         }
 
         // Remove adjacency list entries for this node regardless of detach mode.
@@ -241,12 +245,16 @@ impl GraphStorage {
         self.outgoing.remove(&id);
         self.incoming.remove(&id);
 
-        // Remove node from label index
-        if let Some(node) = self.nodes.get(&id) {
-            for label in &node.labels.clone() {
-                if let Some(set) = self.label_index.get_mut(label) {
-                    set.remove(&id);
-                }
+        // Remove node from label index. Clone labels first to release the
+        // immutable borrow on self.nodes before mutably borrowing self.label_index.
+        let labels: Vec<String> = self
+            .nodes
+            .get(&id)
+            .map(|n| n.labels.clone())
+            .unwrap_or_default();
+        for label in &labels {
+            if let Some(set) = self.label_index.get_mut(label) {
+                set.remove(&id);
             }
         }
 

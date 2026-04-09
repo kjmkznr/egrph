@@ -124,14 +124,24 @@ fn execute_to_records(
         }
 
         LogicalPlan::Filter { input, predicate } => {
-            let (cols, records) = execute_to_records(input, storage, params)?;
-            let mut filtered: Vec<Record> = Vec::new();
-            for rec in records {
-                if is_truthy(&eval_with_params(predicate, &rec, params, storage)?) {
-                    filtered.push(rec);
+            let (cols, mut records) = execute_to_records(input, storage, params)?;
+            let mut filter_err: Option<CypherError> = None;
+            records.retain(|rec| {
+                if filter_err.is_some() {
+                    return false;
                 }
+                match eval_with_params(predicate, rec, params, storage) {
+                    Ok(v) => is_truthy(&v),
+                    Err(e) => {
+                        filter_err = Some(e);
+                        false
+                    }
+                }
+            });
+            if let Some(e) = filter_err {
+                return Err(e);
             }
-            Ok((cols, filtered))
+            Ok((cols, records))
         }
 
         LogicalPlan::Return {
@@ -183,13 +193,16 @@ fn execute_to_records(
             if *distinct {
                 let mut seen = std::collections::HashSet::new();
                 rows.retain(|rec| {
-                    let key = columns
-                        .iter()
-                        .map(|c| {
-                            cypher_value_to_stable_key(rec.get(c).unwrap_or(&CypherValue::Null))
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\x00");
+                    // Build dedup key without intermediate Vec allocation.
+                    let mut key = String::new();
+                    for c in &columns {
+                        if !key.is_empty() {
+                            key.push('\x00');
+                        }
+                        key.push_str(&cypher_value_to_stable_key(
+                            rec.get(c).unwrap_or(&CypherValue::Null),
+                        ));
+                    }
                     seen.insert(key)
                 });
             }
@@ -198,28 +211,23 @@ fn execute_to_records(
         }
 
         LogicalPlan::Sort { input, items } => {
-            let (cols, mut records) = execute_to_records(input, storage, params)?;
-            let mut sort_err: Option<CypherError> = None;
-            records.sort_by(|a, b| {
-                if sort_err.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
+            let (cols, records) = execute_to_records(input, storage, params)?;
+
+            // Pre-compute sort keys once per record: O(N*M) evaluations instead of
+            // O(N log N * M) when re-evaluating expressions inside the comparator.
+            let mut keyed: Vec<(Vec<CypherValue>, Record)> = Vec::with_capacity(records.len());
+            for rec in records {
+                let mut keys = Vec::with_capacity(items.len());
                 for item in items {
-                    let va = match eval_with_params(&item.expression, a, params, storage) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            sort_err = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                    };
-                    let vb = match eval_with_params(&item.expression, b, params, storage) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            sort_err = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                    };
-                    let ord = compare_values(&va, &vb).unwrap_or(std::cmp::Ordering::Equal);
+                    keys.push(eval_with_params(&item.expression, &rec, params, storage)?);
+                }
+                keyed.push((keys, rec));
+            }
+
+            keyed.sort_by(|(keys_a, _), (keys_b, _)| {
+                for (i, item) in items.iter().enumerate() {
+                    let ord =
+                        compare_values(&keys_a[i], &keys_b[i]).unwrap_or(std::cmp::Ordering::Equal);
                     let ord = if item.ascending { ord } else { ord.reverse() };
                     if ord != std::cmp::Ordering::Equal {
                         return ord;
@@ -227,9 +235,8 @@ fn execute_to_records(
                 }
                 std::cmp::Ordering::Equal
             });
-            if let Some(e) = sort_err {
-                return Err(e);
-            }
+
+            let records = keyed.into_iter().map(|(_, rec)| rec).collect();
             Ok((cols, records))
         }
 
@@ -333,11 +340,17 @@ fn execute_to_records(
                 }
             }
 
-            // For each left row, produce one output row combined with each right row
+            // For each left row, produce one output row combined with each right row.
+            // Pre-allocate with left+right capacity to avoid reallocation when merging.
+            let merged_cap = left_records.first().map(|r| r.len()).unwrap_or(0)
+                + right_records.first().map(|r| r.len()).unwrap_or(0);
             let mut result = Vec::with_capacity(left_records.len() * right_records.len().max(1));
             for left_rec in &left_records {
                 for right_rec in &right_records {
-                    let mut merged = left_rec.clone();
+                    let mut merged = HashMap::with_capacity(merged_cap);
+                    for (k, v) in left_rec {
+                        merged.insert(k.clone(), v.clone());
+                    }
                     for (k, v) in right_rec {
                         merged.insert(k.clone(), v.clone());
                     }
@@ -644,11 +657,16 @@ fn execute_with(
     if distinct {
         let mut seen = std::collections::HashSet::new();
         rows.retain(|rec| {
-            let key = columns
-                .iter()
-                .map(|c| cypher_value_to_stable_key(rec.get(c).unwrap_or(&CypherValue::Null)))
-                .collect::<Vec<_>>()
-                .join("\x00");
+            // Build dedup key without intermediate Vec allocation.
+            let mut key = String::new();
+            for c in &columns {
+                if !key.is_empty() {
+                    key.push('\x00');
+                }
+                key.push_str(&cypher_value_to_stable_key(
+                    rec.get(c).unwrap_or(&CypherValue::Null),
+                ));
+            }
             seen.insert(key)
         });
     }
@@ -1074,48 +1092,48 @@ fn execute_var_length_expand(
             _ => continue,
         };
 
-        // BFS state: (current_node_id, path_of_edges_taken)
-        // We avoid revisiting the same edge within a single path to prevent infinite loops.
-        let mut queue: std::collections::VecDeque<(NodeId, Vec<Edge>)> =
+        // BFS state: (current_node_id, path_of_edge_ids_taken)
+        // Storing EdgeIds instead of full Edge structs avoids cloning large Edge objects
+        // at every BFS step; edges are resolved from storage only when emitting results.
+        let mut queue: std::collections::VecDeque<(NodeId, Vec<EdgeId>)> =
             std::collections::VecDeque::new();
         queue.push_back((start_id, Vec::new()));
 
-        while let Some((cur_id, path_edges)) = queue.pop_front() {
-            let depth = path_edges.len() as u64;
+        while let Some((cur_id, path_edge_ids)) = queue.pop_front() {
+            let depth = path_edge_ids.len() as u64;
 
             if depth >= effective_max {
                 continue;
             }
 
-            let next_edges: Vec<Edge> = match direction {
-                Direction::Outgoing => storage
-                    .outgoing_edges(cur_id)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-                Direction::Incoming => storage
-                    .incoming_edges(cur_id)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
+            // Collect candidate edge IDs without allocating Edge objects.
+            // For Undirected we must combine two slices into a Vec; for directed we
+            // can iterate the slice directly with a small wrapper.
+            let undirected_buf: Vec<EdgeId>;
+            let candidate_ids: &[EdgeId] = match direction {
+                Direction::Outgoing => storage.outgoing_edge_ids(cur_id),
+                Direction::Incoming => storage.incoming_edge_ids(cur_id),
                 Direction::Undirected => {
-                    let mut all: Vec<Edge> = storage
-                        .outgoing_edges(cur_id)
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                    all.extend(storage.incoming_edges(cur_id).into_iter().cloned());
-                    all
+                    let out = storage.outgoing_edge_ids(cur_id);
+                    let inc = storage.incoming_edge_ids(cur_id);
+                    undirected_buf = out.iter().chain(inc.iter()).copied().collect();
+                    &undirected_buf
                 }
             };
 
-            for edge in next_edges {
-                // Skip edges already in the path (no repeated relationships)
-                if path_edges.iter().any(|pe| pe.id == edge.id) {
+            for &eid in candidate_ids {
+                // Resolve edge — skip stale IDs left by earlier deletes.
+                let edge = match storage.edges.get(&eid) {
+                    Some(e) => e,
+                    None => continue,
+                };
+
+                // Skip edges already in the path (no repeated relationships).
+                if path_edge_ids.contains(&eid) {
                     continue;
                 }
 
-                // Apply relationship type filter
+                // Apply relationship type filter before any cloning.
                 if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
                     continue;
                 }
@@ -1132,22 +1150,23 @@ fn execute_var_length_expand(
                     }
                 };
 
-                let mut new_path = path_edges.clone();
-                new_path.push(edge.clone());
+                let mut new_path = path_edge_ids.clone();
+                new_path.push(eid);
                 let new_depth = new_path.len() as u64;
 
-                // Emit a result row when depth is within [min_hops, max_hops]
+                // Emit a result row when depth is within [min_hops, max_hops].
                 if new_depth >= min_hops
                     && let Some(dst_node) = storage.get_node(next_id)
                 {
                     let mut new_rec = rec.clone();
                     if let Some(rv) = rel_variable {
-                        // Bind the relationship variable to the list of traversed edges
+                        // Resolve edges from IDs only at emit time.
                         new_rec.insert(
                             rv.to_string(),
                             CypherValue::List(
                                 new_path
                                     .iter()
+                                    .filter_map(|id| storage.edges.get(id))
                                     .map(|e| CypherValue::Relationship(e.clone()))
                                     .collect(),
                             ),
@@ -1160,7 +1179,7 @@ fn execute_var_length_expand(
                     result_records.push(new_rec);
                 }
 
-                // Continue BFS if we haven't hit the maximum depth
+                // Continue BFS if we haven't hit the maximum depth.
                 if new_depth < effective_max {
                     queue.push_back((next_id, new_path));
                 }
