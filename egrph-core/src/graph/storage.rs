@@ -101,16 +101,12 @@ impl GraphStorage {
 
     /// Return the raw outgoing edge ID slice for a node — no allocation.
     pub fn outgoing_edge_ids(&self, node_id: NodeId) -> &[EdgeId] {
-        self.outgoing
-            .get(&node_id)
-            .map_or(&[], |v| v.as_slice())
+        self.outgoing.get(&node_id).map_or(&[], |v| v.as_slice())
     }
 
     /// Return the raw incoming edge ID slice for a node — no allocation.
     pub fn incoming_edge_ids(&self, node_id: NodeId) -> &[EdgeId] {
-        self.incoming
-            .get(&node_id)
-            .map_or(&[], |v| v.as_slice())
+        self.incoming.get(&node_id).map_or(&[], |v| v.as_slice())
     }
 
     pub fn match_nodes(&self, label: Option<&str>) -> Vec<&Node> {

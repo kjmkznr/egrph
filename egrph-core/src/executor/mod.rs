@@ -215,8 +215,7 @@ fn execute_to_records(
 
             // Pre-compute sort keys once per record: O(N*M) evaluations instead of
             // O(N log N * M) when re-evaluating expressions inside the comparator.
-            let mut keyed: Vec<(Vec<CypherValue>, Record)> =
-                Vec::with_capacity(records.len());
+            let mut keyed: Vec<(Vec<CypherValue>, Record)> = Vec::with_capacity(records.len());
             for rec in records {
                 let mut keys = Vec::with_capacity(items.len());
                 for item in items {
@@ -227,8 +226,8 @@ fn execute_to_records(
 
             keyed.sort_by(|(keys_a, _), (keys_b, _)| {
                 for (i, item) in items.iter().enumerate() {
-                    let ord = compare_values(&keys_a[i], &keys_b[i])
-                        .unwrap_or(std::cmp::Ordering::Equal);
+                    let ord =
+                        compare_values(&keys_a[i], &keys_b[i]).unwrap_or(std::cmp::Ordering::Equal);
                     let ord = if item.ascending { ord } else { ord.reverse() };
                     if ord != std::cmp::Ordering::Equal {
                         return ord;
@@ -343,10 +342,7 @@ fn execute_to_records(
 
             // For each left row, produce one output row combined with each right row.
             // Pre-allocate with left+right capacity to avoid reallocation when merging.
-            let merged_cap = left_records
-                .first()
-                .map(|r| r.len())
-                .unwrap_or(0)
+            let merged_cap = left_records.first().map(|r| r.len()).unwrap_or(0)
                 + right_records.first().map(|r| r.len()).unwrap_or(0);
             let mut result = Vec::with_capacity(left_records.len() * right_records.len().max(1));
             for left_rec in &left_records {
