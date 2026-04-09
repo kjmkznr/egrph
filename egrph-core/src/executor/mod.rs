@@ -451,6 +451,29 @@ fn execute_to_records(
     }
 }
 
+// --- Record sync helpers ---
+
+/// Re-reads a node from storage after modification and updates its binding in the record.
+///
+/// Necessary because `Record` holds a snapshot of the node at read time; after a SET or
+/// REMOVE operation the storage copy changes, so the record must be refreshed to reflect
+/// the new state for any subsequent pipeline stages.
+fn sync_node_in_record(rec: &mut Record, variable: &str, node_id: NodeId, storage: &GraphStorage) {
+    if let Some(updated) = storage.get_node(node_id) {
+        rec.insert(variable.to_string(), CypherValue::Node(updated.clone()));
+    }
+}
+
+/// Re-reads an edge from storage after modification and updates its binding in the record.
+fn sync_edge_in_record(rec: &mut Record, variable: &str, edge_id: EdgeId, storage: &GraphStorage) {
+    if let Some(updated) = storage.get_edge(edge_id) {
+        rec.insert(
+            variable.to_string(),
+            CypherValue::Relationship(updated.clone()),
+        );
+    }
+}
+
 // --- Concrete executors ---
 
 fn execute_create_node(
@@ -762,19 +785,12 @@ fn apply_set_item(
                     Some(CypherValue::Node(n)) => {
                         let nid = n.id;
                         storage.remove_node_property(nid, property);
-                        if let Some(updated) = storage.get_node(nid) {
-                            rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                        }
+                        sync_node_in_record(rec, variable, nid, storage);
                     }
                     Some(CypherValue::Relationship(e)) => {
                         let eid = e.id;
                         storage.remove_edge_property(eid, property);
-                        if let Some(updated) = storage.get_edge(eid) {
-                            rec.insert(
-                                variable.clone(),
-                                CypherValue::Relationship(updated.clone()),
-                            );
-                        }
+                        sync_edge_in_record(rec, variable, eid, storage);
                     }
                     _ => {}
                 }
@@ -784,20 +800,12 @@ fn apply_set_item(
                     Some(CypherValue::Node(n)) => {
                         let nid = n.id;
                         storage.set_node_property(nid, property.clone(), prop_val);
-                        // Update the record's node copy
-                        if let Some(updated) = storage.get_node(nid) {
-                            rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                        }
+                        sync_node_in_record(rec, variable, nid, storage);
                     }
                     Some(CypherValue::Relationship(e)) => {
                         let eid = e.id;
                         storage.set_edge_property(eid, property.clone(), prop_val);
-                        if let Some(updated) = storage.get_edge(eid) {
-                            rec.insert(
-                                variable.clone(),
-                                CypherValue::Relationship(updated.clone()),
-                            );
-                        }
+                        sync_edge_in_record(rec, variable, eid, storage);
                     }
                     _ => {}
                 }
@@ -809,19 +817,16 @@ fn apply_set_item(
         } => {
             let val = eval_with_params(expression, rec, params, storage)?;
             let props = cypher_value_to_property_map(&val)?;
-
             match rec.get(variable) {
                 Some(CypherValue::Node(n)) => {
-                    storage.set_node_all_properties(n.id, props);
-                    if let Some(updated) = storage.get_node(n.id) {
-                        rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                    }
+                    let nid = n.id;
+                    storage.set_node_all_properties(nid, props);
+                    sync_node_in_record(rec, variable, nid, storage);
                 }
                 Some(CypherValue::Relationship(e)) => {
-                    storage.set_edge_all_properties(e.id, props);
-                    if let Some(updated) = storage.get_edge(e.id) {
-                        rec.insert(variable.clone(), CypherValue::Relationship(updated.clone()));
-                    }
+                    let eid = e.id;
+                    storage.set_edge_all_properties(eid, props);
+                    sync_edge_in_record(rec, variable, eid, storage);
                 }
                 _ => {}
             }
@@ -832,29 +837,25 @@ fn apply_set_item(
         } => {
             let val = eval_with_params(expression, rec, params, storage)?;
             let props = cypher_value_to_property_map(&val)?;
-
             match rec.get(variable) {
                 Some(CypherValue::Node(n)) => {
-                    storage.merge_node_properties(n.id, props);
-                    if let Some(updated) = storage.get_node(n.id) {
-                        rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                    }
+                    let nid = n.id;
+                    storage.merge_node_properties(nid, props);
+                    sync_node_in_record(rec, variable, nid, storage);
                 }
                 Some(CypherValue::Relationship(e)) => {
-                    storage.merge_edge_properties(e.id, props);
-                    if let Some(updated) = storage.get_edge(e.id) {
-                        rec.insert(variable.clone(), CypherValue::Relationship(updated.clone()));
-                    }
+                    let eid = e.id;
+                    storage.merge_edge_properties(eid, props);
+                    sync_edge_in_record(rec, variable, eid, storage);
                 }
                 _ => {}
             }
         }
         SetItem::Label { variable, labels } => {
             if let Some(CypherValue::Node(n)) = rec.get(variable) {
-                storage.add_node_labels(n.id, labels);
-                if let Some(updated) = storage.get_node(n.id) {
-                    rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                }
+                let nid = n.id;
+                storage.add_node_labels(nid, labels);
+                sync_node_in_record(rec, variable, nid, storage);
             }
         }
     }
@@ -874,28 +875,22 @@ fn execute_remove(
             match item {
                 RemoveItem::Property { variable, property } => match rec.get(variable) {
                     Some(CypherValue::Node(n)) => {
-                        storage.remove_node_property(n.id, property);
-                        if let Some(updated) = storage.get_node(n.id) {
-                            rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                        }
+                        let nid = n.id;
+                        storage.remove_node_property(nid, property);
+                        sync_node_in_record(rec, variable, nid, storage);
                     }
                     Some(CypherValue::Relationship(e)) => {
-                        storage.remove_edge_property(e.id, property);
-                        if let Some(updated) = storage.get_edge(e.id) {
-                            rec.insert(
-                                variable.clone(),
-                                CypherValue::Relationship(updated.clone()),
-                            );
-                        }
+                        let eid = e.id;
+                        storage.remove_edge_property(eid, property);
+                        sync_edge_in_record(rec, variable, eid, storage);
                     }
                     _ => {}
                 },
                 RemoveItem::Label { variable, labels } => {
                     if let Some(CypherValue::Node(n)) = rec.get(variable) {
-                        storage.remove_node_labels(n.id, labels);
-                        if let Some(updated) = storage.get_node(n.id) {
-                            rec.insert(variable.clone(), CypherValue::Node(updated.clone()));
-                        }
+                        let nid = n.id;
+                        storage.remove_node_labels(nid, labels);
+                        sync_node_in_record(rec, variable, nid, storage);
                     }
                 }
             }
