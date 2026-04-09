@@ -11,6 +11,10 @@ thread_local! {
     static REGEX_CACHE: RefCell<HashMap<String, Option<Regex>>> = RefCell::new(HashMap::new());
 }
 
+/// Maximum number of compiled regex patterns to keep per thread before evicting
+/// the oldest entry. This bounds per-thread memory usage for regex-heavy workloads.
+const REGEX_CACHE_MAX_ENTRIES: usize = 256;
+
 /// A record is a mapping of variable names to CypherValues.
 pub type Record = HashMap<String, CypherValue>;
 
@@ -219,7 +223,7 @@ pub fn property_value_to_cypher(pv: &PropertyValue) -> CypherValue {
     }
 }
 
-fn to_f64(v: &CypherValue) -> Option<f64> {
+pub fn to_f64(v: &CypherValue) -> Option<f64> {
     match v {
         CypherValue::Integer(i) => Some(*i as f64),
         CypherValue::Float(f) => Some(*f),
@@ -437,7 +441,7 @@ fn eval_regex_match(value: &CypherValue, pattern: &CypherValue) -> CypherValue {
             let is_match = REGEX_CACHE.with(|cache| {
                 let mut map = cache.borrow_mut();
                 // Evict oldest entry when cache reaches limit to bound memory usage.
-                if map.len() >= 256
+                if map.len() >= REGEX_CACHE_MAX_ENTRIES
                     && !map.contains_key(&full_pattern)
                     && let Some(key) = map.keys().next().cloned()
                 {
@@ -515,6 +519,20 @@ fn eval_dynamic_property(base: &CypherValue, key: &CypherValue) -> CypherValue {
 
 // --- List slice ---
 
+/// Resolve a slice index with negative-wrapping semantics, clamped to `[0, len]`.
+///
+/// Negative indices count from the end (e.g. -1 → last element).
+/// `default` is returned when `val` is `None` or a non-integer type.
+fn resolve_slice_index(val: Option<&CypherValue>, len: i64, default: i64) -> i64 {
+    match val {
+        None => default,
+        Some(CypherValue::Integer(i)) => {
+            if *i < 0 { (len + *i).max(0) } else { (*i).min(len) }
+        }
+        _ => default,
+    }
+}
+
 fn eval_list_slice(
     base: &CypherValue,
     start: Option<&CypherValue>,
@@ -524,24 +542,8 @@ fn eval_list_slice(
         CypherValue::Null => CypherValue::Null,
         CypherValue::List(items) => {
             let len = items.len() as i64;
-
-            let resolve_idx = |val: Option<&CypherValue>, default: i64| -> i64 {
-                match val {
-                    None => default,
-                    Some(CypherValue::Integer(i)) => {
-                        let idx = *i;
-                        if idx < 0 {
-                            (len + idx).max(0)
-                        } else {
-                            idx.min(len)
-                        }
-                    }
-                    _ => default,
-                }
-            };
-
-            let start_idx = resolve_idx(start, 0) as usize;
-            let end_idx = resolve_idx(end, len) as usize;
+            let start_idx = resolve_slice_index(start, len, 0) as usize;
+            let end_idx = resolve_slice_index(end, len, len) as usize;
 
             if start_idx >= end_idx || start_idx >= items.len() {
                 CypherValue::List(Vec::new())
@@ -552,22 +554,8 @@ fn eval_list_slice(
         CypherValue::String(s) => {
             // String slicing (same semantics as list slicing) -- use char indices
             let char_count = s.chars().count() as i64;
-            let resolve_idx = |val: Option<&CypherValue>, default: i64| -> i64 {
-                match val {
-                    None => default,
-                    Some(CypherValue::Integer(i)) => {
-                        let idx = *i;
-                        if idx < 0 {
-                            (char_count + idx).max(0)
-                        } else {
-                            idx.min(char_count)
-                        }
-                    }
-                    _ => default,
-                }
-            };
-            let start_idx = resolve_idx(start, 0) as usize;
-            let end_idx = resolve_idx(end, char_count) as usize;
+            let start_idx = resolve_slice_index(start, char_count, 0) as usize;
+            let end_idx = resolve_slice_index(end, char_count, char_count) as usize;
             if start_idx >= end_idx {
                 CypherValue::String(String::new())
             } else {

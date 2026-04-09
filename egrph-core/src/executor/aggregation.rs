@@ -1,5 +1,5 @@
 use super::expression::{
-    Parameters, Record, compare_values, cypher_value_to_stable_key, eval_with_params,
+    Parameters, Record, compare_values, cypher_value_to_stable_key, eval_with_params, to_f64,
 };
 use crate::ast::{Expression, ReturnItem};
 use crate::error::CypherError;
@@ -351,14 +351,6 @@ fn collect_non_null_values(
     }
 
     Ok(vals)
-}
-
-fn to_f64(v: &CypherValue) -> Option<f64> {
-    match v {
-        CypherValue::Integer(i) => Some(*i as f64),
-        CypherValue::Float(f) => Some(*f),
-        _ => None,
-    }
 }
 
 fn sum_values(vals: &[CypherValue]) -> Result<CypherValue, CypherError> {
