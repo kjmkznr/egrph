@@ -1650,4 +1650,291 @@ mod tests {
             .unwrap();
         assert_eq!(result.rows.len(), 1);
     }
+
+    // --- Aggregation tests ---
+
+    #[test]
+    fn test_count_star() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name: 'Bob'})").unwrap();
+        g.execute("CREATE (:Person {name: 'Carol'})").unwrap();
+
+        let result = g.execute("MATCH (p:Person) RETURN count(*)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(3));
+    }
+
+    #[test]
+    fn test_count_star_empty() {
+        let mut g = Graph::new();
+        // No nodes — COUNT(*) should return 0, not empty
+        let result = g.execute("MATCH (p:Person) RETURN count(*)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(0));
+    }
+
+    #[test]
+    fn test_count_expr() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name: 'Bob'})").unwrap();
+
+        let result = g.execute("MATCH (p:Person) RETURN count(p)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(2));
+    }
+
+    #[test]
+    fn test_count_distinct() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {city: 'Tokyo'})").unwrap();
+        g.execute("CREATE (:Person {city: 'Tokyo'})").unwrap();
+        g.execute("CREATE (:Person {city: 'Osaka'})").unwrap();
+
+        let result = g
+            .execute("MATCH (p:Person) RETURN count(DISTINCT p.city)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(2));
+    }
+
+    #[test]
+    fn test_sum() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {age: 30})").unwrap();
+        g.execute("CREATE (:Person {age: 25})").unwrap();
+        g.execute("CREATE (:Person {age: 35})").unwrap();
+
+        let result = g.execute("MATCH (p:Person) RETURN sum(p.age)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(90));
+    }
+
+    #[test]
+    fn test_avg() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {age: 10})").unwrap();
+        g.execute("CREATE (:Person {age: 20})").unwrap();
+        g.execute("CREATE (:Person {age: 30})").unwrap();
+
+        let result = g.execute("MATCH (p:Person) RETURN avg(p.age)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Float(20.0));
+    }
+
+    #[test]
+    fn test_min() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Item {score: 5})").unwrap();
+        g.execute("CREATE (:Item {score: 1})").unwrap();
+        g.execute("CREATE (:Item {score: 9})").unwrap();
+
+        let result = g.execute("MATCH (i:Item) RETURN min(i.score)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(1));
+    }
+
+    #[test]
+    fn test_max() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Item {score: 5})").unwrap();
+        g.execute("CREATE (:Item {score: 1})").unwrap();
+        g.execute("CREATE (:Item {score: 9})").unwrap();
+
+        let result = g.execute("MATCH (i:Item) RETURN max(i.score)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(9));
+    }
+
+    #[test]
+    fn test_collect() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name: 'Bob'})").unwrap();
+
+        let result = g
+            .execute("MATCH (p:Person) RETURN collect(p.name)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        if let CypherValue::List(mut items) = result.rows[0].values[0].clone() {
+            items.sort_by(|a, b| {
+                let ka = if let CypherValue::String(s) = a {
+                    s.as_str()
+                } else {
+                    ""
+                };
+                let kb = if let CypherValue::String(s) = b {
+                    s.as_str()
+                } else {
+                    ""
+                };
+                ka.cmp(kb)
+            });
+            assert_eq!(
+                items,
+                vec![
+                    CypherValue::String("Alice".to_string()),
+                    CypherValue::String("Bob".to_string()),
+                ]
+            );
+        } else {
+            panic!("Expected List from collect()");
+        }
+    }
+
+    #[test]
+    fn test_collect_distinct() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {city: 'Tokyo'})").unwrap();
+        g.execute("CREATE (:Person {city: 'Tokyo'})").unwrap();
+        g.execute("CREATE (:Person {city: 'Osaka'})").unwrap();
+
+        let result = g
+            .execute("MATCH (p:Person) RETURN collect(DISTINCT p.city)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        if let CypherValue::List(mut items) = result.rows[0].values[0].clone() {
+            items.sort_by(|a, b| {
+                let ka = if let CypherValue::String(s) = a {
+                    s.as_str()
+                } else {
+                    ""
+                };
+                let kb = if let CypherValue::String(s) = b {
+                    s.as_str()
+                } else {
+                    ""
+                };
+                ka.cmp(kb)
+            });
+            assert_eq!(
+                items,
+                vec![
+                    CypherValue::String("Osaka".to_string()),
+                    CypherValue::String("Tokyo".to_string()),
+                ]
+            );
+        } else {
+            panic!("Expected List from collect(DISTINCT ...)");
+        }
+    }
+
+    #[test]
+    fn test_group_by_aggregation() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {city: 'Tokyo', age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {city: 'Tokyo', age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {city: 'Osaka', age: 40})")
+            .unwrap();
+
+        let result = g
+            .execute("MATCH (p:Person) RETURN p.city, count(*) ORDER BY p.city")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        // Osaka comes first alphabetically
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Osaka".to_string())
+        );
+        assert_eq!(result.rows[0].values[1], CypherValue::Integer(1));
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("Tokyo".to_string())
+        );
+        assert_eq!(result.rows[1].values[1], CypherValue::Integer(2));
+    }
+
+    #[test]
+    fn test_group_by_sum() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Sale {region: 'East', amount: 100})")
+            .unwrap();
+        g.execute("CREATE (:Sale {region: 'East', amount: 200})")
+            .unwrap();
+        g.execute("CREATE (:Sale {region: 'West', amount: 150})")
+            .unwrap();
+
+        let result = g
+            .execute("MATCH (s:Sale) RETURN s.region, sum(s.amount) ORDER BY s.region")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("East".to_string())
+        );
+        assert_eq!(result.rows[0].values[1], CypherValue::Integer(300));
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("West".to_string())
+        );
+        assert_eq!(result.rows[1].values[1], CypherValue::Integer(150));
+    }
+
+    #[test]
+    fn test_aggregation_with_with_clause() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: 'Alice', age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Bob', age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Carol', age: 35})")
+            .unwrap();
+
+        // COUNT via WITH then RETURN
+        let result = g
+            .execute("MATCH (p:Person) WITH count(*) AS total RETURN total")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(3));
+    }
+
+    #[test]
+    fn test_sum_empty() {
+        let mut g = Graph::new();
+        // No nodes — SUM should return 0
+        let result = g.execute("MATCH (p:Person) RETURN sum(p.age)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(0));
+    }
+
+    #[test]
+    fn test_avg_empty() {
+        let mut g = Graph::new();
+        // No nodes — AVG should return Null
+        let result = g.execute("MATCH (p:Person) RETURN avg(p.age)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_min_empty() {
+        let mut g = Graph::new();
+        // No nodes — MIN should return Null
+        let result = g.execute("MATCH (i:Item) RETURN min(i.score)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_max_empty() {
+        let mut g = Graph::new();
+        // No nodes — MAX should return Null
+        let result = g.execute("MATCH (i:Item) RETURN max(i.score)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_collect_empty() {
+        let mut g = Graph::new();
+        // No nodes — COLLECT should return empty list
+        let result = g
+            .execute("MATCH (p:Person) RETURN collect(p.name)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::List(vec![]));
+    }
 }
