@@ -3,6 +3,11 @@
 #[derive(Debug, Clone)]
 pub enum Statement {
     Query(Query),
+    Union {
+        left: Box<Statement>,
+        right: Box<Statement>,
+        all: bool,
+    },
 }
 
 #[derive(Debug, Clone)]

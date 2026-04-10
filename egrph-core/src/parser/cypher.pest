@@ -1,8 +1,14 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
 
-// Top-level query: sequence of clauses
-query = { SOI ~ clause+ ~ EOI }
+// Top-level statement: one or more queries joined by UNION / UNION ALL
+statement = { SOI ~ query ~ (union_op ~ query)* ~ EOI }
+union_op  = { union_kw ~ all_kw? }
+union_kw  = @{ ^"UNION" ~ !ASCII_ALPHANUMERIC }
+all_kw    = @{ ^"ALL"   ~ !ASCII_ALPHANUMERIC }
+
+// A single query: sequence of clauses
+query = { clause+ }
 
 clause = {
     create_clause
@@ -242,4 +248,5 @@ reserved_word = {
   | ^"WITH" | ^"UNWIND" | ^"SET" | ^"REMOVE" | ^"DELETE" | ^"DETACH"
   | ^"MERGE" | ^"ON"
   | ^"REDUCE" | ^"ANY" | ^"ALL" | ^"NONE" | ^"SINGLE"
+  | ^"UNION"
 }

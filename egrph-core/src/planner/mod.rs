@@ -7,6 +7,11 @@ use crate::error::CypherError;
 pub fn plan(stmt: &Statement) -> Result<LogicalPlan, CypherError> {
     match stmt {
         Statement::Query(query) => plan_query(query),
+        Statement::Union { left, right, all } => Ok(LogicalPlan::Union {
+            left: Box::new(plan(left)?),
+            right: Box::new(plan(right)?),
+            all: *all,
+        }),
     }
 }
 
