@@ -20,6 +20,15 @@ pub fn execute(plan: &LogicalPlan, storage: &mut GraphStorage) -> Result<QueryRe
     Ok(records_to_query_result(cols, records))
 }
 
+pub fn execute_with_params(
+    plan: &LogicalPlan,
+    storage: &mut GraphStorage,
+    params: Parameters,
+) -> Result<QueryResult, CypherError> {
+    let (cols, records) = execute_to_records(plan, storage, &params)?;
+    Ok(records_to_query_result(cols, records))
+}
+
 /// Execute a plan and return (columns, records) where each record is a HashMap.
 fn execute_to_records(
     plan: &LogicalPlan,
