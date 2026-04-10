@@ -1754,12 +1754,22 @@ mod tests {
         g.execute("CREATE (:Person {name: 'Bob'})").unwrap();
 
         let result = g
-            .execute("MATCH (p:Person) RETURN collect(p.name) ORDER BY p.name")
+            .execute("MATCH (p:Person) RETURN collect(p.name)")
             .unwrap();
         assert_eq!(result.rows.len(), 1);
-        // collect returns a List
-        if let CypherValue::List(items) = &result.rows[0].values[0] {
-            assert_eq!(items.len(), 2);
+        if let CypherValue::List(mut items) = result.rows[0].values[0].clone() {
+            items.sort_by(|a, b| {
+                let ka = if let CypherValue::String(s) = a { s.as_str() } else { "" };
+                let kb = if let CypherValue::String(s) = b { s.as_str() } else { "" };
+                ka.cmp(kb)
+            });
+            assert_eq!(
+                items,
+                vec![
+                    CypherValue::String("Alice".to_string()),
+                    CypherValue::String("Bob".to_string()),
+                ]
+            );
         } else {
             panic!("Expected List from collect()");
         }
@@ -1776,8 +1786,19 @@ mod tests {
             .execute("MATCH (p:Person) RETURN collect(DISTINCT p.city)")
             .unwrap();
         assert_eq!(result.rows.len(), 1);
-        if let CypherValue::List(items) = &result.rows[0].values[0] {
-            assert_eq!(items.len(), 2);
+        if let CypherValue::List(mut items) = result.rows[0].values[0].clone() {
+            items.sort_by(|a, b| {
+                let ka = if let CypherValue::String(s) = a { s.as_str() } else { "" };
+                let kb = if let CypherValue::String(s) = b { s.as_str() } else { "" };
+                ka.cmp(kb)
+            });
+            assert_eq!(
+                items,
+                vec![
+                    CypherValue::String("Osaka".to_string()),
+                    CypherValue::String("Tokyo".to_string()),
+                ]
+            );
         } else {
             panic!("Expected List from collect(DISTINCT ...)");
         }
@@ -1852,5 +1873,52 @@ mod tests {
             .unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].values[0], CypherValue::Integer(3));
+    }
+
+    #[test]
+    fn test_sum_empty() {
+        let mut g = Graph::new();
+        // No nodes — SUM should return 0
+        let result = g.execute("MATCH (p:Person) RETURN sum(p.age)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Integer(0));
+    }
+
+    #[test]
+    fn test_avg_empty() {
+        let mut g = Graph::new();
+        // No nodes — AVG should return Null
+        let result = g.execute("MATCH (p:Person) RETURN avg(p.age)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_min_empty() {
+        let mut g = Graph::new();
+        // No nodes — MIN should return Null
+        let result = g.execute("MATCH (i:Item) RETURN min(i.score)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_max_empty() {
+        let mut g = Graph::new();
+        // No nodes — MAX should return Null
+        let result = g.execute("MATCH (i:Item) RETURN max(i.score)").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_collect_empty() {
+        let mut g = Graph::new();
+        // No nodes — COLLECT should return empty list
+        let result = g
+            .execute("MATCH (p:Person) RETURN collect(p.name)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], CypherValue::List(vec![]));
     }
 }
