@@ -10,22 +10,53 @@ pub struct CypherParser;
 
 /// Main parse entry point. Parses a Cypher query string into an AST Statement.
 pub fn parse(input: &str) -> Result<Statement, CypherError> {
-    let pairs = CypherParser::parse(Rule::query, input)
+    let pairs = CypherParser::parse(Rule::statement, input)
         .map_err(|e| CypherError::ParseError(format!("{}", e)))?;
 
-    let mut clauses = Vec::new();
-
     for pair in pairs {
-        if pair.as_rule() == Rule::query {
+        if pair.as_rule() == Rule::statement {
+            let mut queries: Vec<Query> = Vec::new();
+            let mut union_alls: Vec<bool> = Vec::new();
+
             for inner in pair.into_inner() {
-                if inner.as_rule() == Rule::clause {
-                    parse_clause(inner, &mut clauses)?;
+                match inner.as_rule() {
+                    Rule::query => queries.push(parse_query(inner)?),
+                    Rule::union_op => {
+                        let is_all = inner.into_inner().any(|t| t.as_rule() == Rule::all_kw);
+                        union_alls.push(is_all);
+                    }
+                    _ => {}
                 }
             }
+
+            if queries.is_empty() {
+                return Err(CypherError::ParseError("Empty statement".to_string()));
+            }
+
+            // Build left-associative Union tree
+            let mut result = Statement::Query(queries.remove(0));
+            for (all, query) in union_alls.into_iter().zip(queries.into_iter()) {
+                result = Statement::Union {
+                    left: Box::new(result),
+                    right: Box::new(Statement::Query(query)),
+                    all,
+                };
+            }
+            return Ok(result);
         }
     }
 
-    Ok(Statement::Query(Query { clauses }))
+    Err(CypherError::ParseError("No statement found".to_string()))
+}
+
+fn parse_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, CypherError> {
+    let mut clauses = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::clause {
+            parse_clause(inner, &mut clauses)?;
+        }
+    }
+    Ok(Query { clauses })
 }
 
 /// Backward-compatible alias

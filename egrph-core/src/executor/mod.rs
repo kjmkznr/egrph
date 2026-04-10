@@ -457,6 +457,54 @@ fn execute_to_records(
             storage,
             params,
         ),
+
+        LogicalPlan::Union { left, right, all } => {
+            let (left_cols, left_records) = execute_to_records(left, storage, params)?;
+            let (right_cols, right_records) = execute_to_records(right, storage, params)?;
+
+            if left_cols.len() != right_cols.len() {
+                return Err(CypherError::TypeError(
+                    "All sub queries in a UNION must have the same number of columns".to_string(),
+                ));
+            }
+
+            // Remap right-side records to use left-side column names (match by position)
+            let remapped: Vec<Record> = right_records
+                .into_iter()
+                .map(|rec| {
+                    right_cols.iter().zip(left_cols.iter()).fold(
+                        Record::new(),
+                        |mut r, (rk, lk)| {
+                            r.insert(
+                                lk.clone(),
+                                rec.get(rk).cloned().unwrap_or(CypherValue::Null),
+                            );
+                            r
+                        },
+                    )
+                })
+                .collect();
+
+            let mut combined = left_records;
+            combined.extend(remapped);
+
+            if !all {
+                // UNION: deduplicate by stable key
+                let mut seen = std::collections::HashSet::new();
+                combined.retain(|rec| {
+                    let key = left_cols
+                        .iter()
+                        .map(|col| {
+                            cypher_value_to_stable_key(rec.get(col).unwrap_or(&CypherValue::Null))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\x00");
+                    seen.insert(key)
+                });
+            }
+
+            Ok((left_cols, combined))
+        }
     }
 }
 

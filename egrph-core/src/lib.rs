@@ -88,6 +88,7 @@ mod tests {
                     _ => panic!("Expected Create clause"),
                 }
             }
+            _ => panic!("Expected single Query statement"),
         }
     }
 
@@ -1554,5 +1555,99 @@ mod tests {
             CypherValue::String("Dave".to_string())
         );
         assert_eq!(result.rows[0].values[1], CypherValue::Integer(40));
+    }
+
+    // --- UNION / UNION ALL tests ---
+
+    #[test]
+    fn test_union_basic() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:B {name: 'Bob'})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:A) RETURN n.name UNION MATCH (n:B) RETURN n.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_union_dedup() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:B {name: 'Alice'})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:A) RETURN n.name UNION MATCH (n:B) RETURN n.name")
+            .unwrap();
+        // UNION removes duplicates: both sides return 'Alice', result is 1 row
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_union_all_keeps_duplicates() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:B {name: 'Alice'})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:A) RETURN n.name UNION ALL MATCH (n:B) RETURN n.name")
+            .unwrap();
+        // UNION ALL preserves duplicates
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_union_all_case_insensitive() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {name: 'Alice'})").unwrap();
+        g.execute("CREATE (:B {name: 'Bob'})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:A) RETURN n.name union all MATCH (n:B) RETURN n.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_union_column_count_mismatch_error() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {name: 'Alice', age: 30})").unwrap();
+
+        let result = g.execute("MATCH (n:A) RETURN n.name UNION MATCH (n:A) RETURN n.name, n.age");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_union_three_way() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {val: 1})").unwrap();
+        g.execute("CREATE (:B {val: 2})").unwrap();
+        g.execute("CREATE (:C {val: 3})").unwrap();
+
+        let result = g
+            .execute(
+                "MATCH (n:A) RETURN n.val \
+                 UNION MATCH (n:B) RETURN n.val \
+                 UNION MATCH (n:C) RETURN n.val",
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 3);
+    }
+
+    #[test]
+    fn test_union_empty_side() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A {name: 'Alice'})").unwrap();
+        // No :B nodes
+
+        let result = g
+            .execute("MATCH (n:A) RETURN n.name UNION MATCH (n:B) RETURN n.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
     }
 }

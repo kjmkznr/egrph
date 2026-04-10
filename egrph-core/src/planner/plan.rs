@@ -136,4 +136,11 @@ pub enum LogicalPlan {
         min_hops: u64,
         max_hops: Option<u64>,
     },
+
+    /// UNION / UNION ALL: combine results of two sub-plans.
+    Union {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        all: bool,
+    },
 }
