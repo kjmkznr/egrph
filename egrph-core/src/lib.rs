@@ -1448,8 +1448,10 @@ mod tests {
     #[test]
     fn test_parameterized_query_integer() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: 'Alice', age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: 'Bob', age: 25})").unwrap();
+        g.execute("CREATE (:Person {name: 'Alice', age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Bob', age: 25})")
+            .unwrap();
 
         let mut params = HashMap::new();
         params.insert("min_age".to_string(), CypherValue::Integer(28));
@@ -1474,7 +1476,10 @@ mod tests {
         g.execute("CREATE (:Person {name: 'Bob'})").unwrap();
 
         let mut params = HashMap::new();
-        params.insert("target".to_string(), CypherValue::String("Alice".to_string()));
+        params.insert(
+            "target".to_string(),
+            CypherValue::String("Alice".to_string()),
+        );
 
         let result = g
             .execute_with_params(
@@ -1492,9 +1497,12 @@ mod tests {
     #[test]
     fn test_parameterized_query_multiple_params() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: 'Alice', age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: 'Bob', age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: 'Carol', age: 35})").unwrap();
+        g.execute("CREATE (:Person {name: 'Alice', age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Bob', age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Carol', age: 35})")
+            .unwrap();
 
         let mut params = HashMap::new();
         params.insert("min_age".to_string(), CypherValue::Integer(26));
@@ -1536,15 +1544,10 @@ mod tests {
         params.insert("name".to_string(), CypherValue::String("Dave".to_string()));
         params.insert("age".to_string(), CypherValue::Integer(40));
 
-        g.execute_with_params(
-            "CREATE (:Person {name: $name, age: $age})",
-            params,
-        )
-        .unwrap();
-
-        let result = g
-            .execute("MATCH (p:Person) RETURN p.name, p.age")
+        g.execute_with_params("CREATE (:Person {name: $name, age: $age})", params)
             .unwrap();
+
+        let result = g.execute("MATCH (p:Person) RETURN p.name, p.age").unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0].values[0],
