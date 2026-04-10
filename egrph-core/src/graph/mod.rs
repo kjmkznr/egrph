@@ -31,6 +31,17 @@ impl Graph {
         crate::executor::execute(&plan, &mut self.storage)
     }
 
+    /// Execute a Cypher query with named parameters ($param syntax).
+    pub fn execute_with_params(
+        &mut self,
+        q: &str,
+        params: HashMap<String, CypherValue>,
+    ) -> Result<QueryResult, CypherError> {
+        let stmt = crate::parser::parse_with_return_extraction(q)?;
+        let plan = crate::planner::plan(&stmt)?;
+        crate::executor::execute_with_params(&plan, &mut self.storage, params)
+    }
+
     /// Legacy query method - preserved for backward compatibility.
     /// Returns node IDs from the result.
     #[deprecated(note = "Use execute() instead")]
