@@ -1759,8 +1759,16 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         if let CypherValue::List(mut items) = result.rows[0].values[0].clone() {
             items.sort_by(|a, b| {
-                let ka = if let CypherValue::String(s) = a { s.as_str() } else { "" };
-                let kb = if let CypherValue::String(s) = b { s.as_str() } else { "" };
+                let ka = if let CypherValue::String(s) = a {
+                    s.as_str()
+                } else {
+                    ""
+                };
+                let kb = if let CypherValue::String(s) = b {
+                    s.as_str()
+                } else {
+                    ""
+                };
                 ka.cmp(kb)
             });
             assert_eq!(
@@ -1788,8 +1796,16 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         if let CypherValue::List(mut items) = result.rows[0].values[0].clone() {
             items.sort_by(|a, b| {
-                let ka = if let CypherValue::String(s) = a { s.as_str() } else { "" };
-                let kb = if let CypherValue::String(s) = b { s.as_str() } else { "" };
+                let ka = if let CypherValue::String(s) = a {
+                    s.as_str()
+                } else {
+                    ""
+                };
+                let kb = if let CypherValue::String(s) = b {
+                    s.as_str()
+                } else {
+                    ""
+                };
                 ka.cmp(kb)
             });
             assert_eq!(
