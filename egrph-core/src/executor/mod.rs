@@ -9,20 +9,23 @@ use self::expression::{
 use self::result::{QueryResult, ResultRow};
 use crate::ast::*;
 use crate::error::CypherError;
-use crate::graph::storage::GraphStorage;
+use crate::graph::backend::StorageBackend;
 use crate::graph::types::*;
 use crate::planner::plan::LogicalPlan;
 use std::collections::HashMap;
 
-pub fn execute(plan: &LogicalPlan, storage: &mut GraphStorage) -> Result<QueryResult, CypherError> {
+pub fn execute<S: StorageBackend>(
+    plan: &LogicalPlan,
+    storage: &mut S,
+) -> Result<QueryResult, CypherError> {
     let params: Parameters = HashMap::new();
     let (cols, records) = execute_to_records(plan, storage, &params)?;
     Ok(records_to_query_result(cols, records))
 }
 
-pub fn execute_with_params(
+pub fn execute_with_params<S: StorageBackend>(
     plan: &LogicalPlan,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: Parameters,
 ) -> Result<QueryResult, CypherError> {
     let (cols, records) = execute_to_records(plan, storage, &params)?;
@@ -30,9 +33,9 @@ pub fn execute_with_params(
 }
 
 /// Execute a plan and return (columns, records) where each record is a HashMap.
-fn execute_to_records(
+fn execute_to_records<S: StorageBackend>(
     plan: &LogicalPlan,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     match plan {
@@ -123,7 +126,7 @@ fn execute_to_records(
                         if let Some(rv) = rel_variable {
                             new_rec.insert(rv.clone(), CypherValue::Relationship(edge.clone()));
                         }
-                        new_rec.insert(dst_variable.clone(), CypherValue::Node(dst_node.clone()));
+                        new_rec.insert(dst_variable.clone(), CypherValue::Node(dst_node));
                         result_records.push(new_rec);
                     }
                 }
@@ -515,28 +518,35 @@ fn execute_to_records(
 /// Necessary because `Record` holds a snapshot of the node at read time; after a SET or
 /// REMOVE operation the storage copy changes, so the record must be refreshed to reflect
 /// the new state for any subsequent pipeline stages.
-fn sync_node_in_record(rec: &mut Record, variable: &str, node_id: NodeId, storage: &GraphStorage) {
+fn sync_node_in_record<S: StorageBackend>(
+    rec: &mut Record,
+    variable: &str,
+    node_id: NodeId,
+    storage: &S,
+) {
     if let Some(updated) = storage.get_node(node_id) {
-        rec.insert(variable.to_string(), CypherValue::Node(updated.clone()));
+        rec.insert(variable.to_string(), CypherValue::Node(updated));
     }
 }
 
 /// Re-reads an edge from storage after modification and updates its binding in the record.
-fn sync_edge_in_record(rec: &mut Record, variable: &str, edge_id: EdgeId, storage: &GraphStorage) {
+fn sync_edge_in_record<S: StorageBackend>(
+    rec: &mut Record,
+    variable: &str,
+    edge_id: EdgeId,
+    storage: &S,
+) {
     if let Some(updated) = storage.get_edge(edge_id) {
-        rec.insert(
-            variable.to_string(),
-            CypherValue::Relationship(updated.clone()),
-        );
+        rec.insert(variable.to_string(), CypherValue::Relationship(updated));
     }
 }
 
 // --- Concrete executors ---
 
-fn execute_create_node(
+fn execute_create_node<S: StorageBackend>(
     input: &LogicalPlan,
     pattern: &NodePattern,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (mut cols, input_records) = execute_to_records(input, storage, params)?;
@@ -575,11 +585,11 @@ fn execute_create_node(
     Ok((cols, result))
 }
 
-fn execute_create_path(
+fn execute_create_path<S: StorageBackend>(
     input: &LogicalPlan,
     start: &NodePattern,
     elements: &[PatternChainElement],
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (mut cols, input_records) = execute_to_records(input, storage, params)?;
@@ -700,12 +710,12 @@ fn execute_create_path(
     Ok((cols, result))
 }
 
-fn execute_with(
+fn execute_with<S: StorageBackend>(
     input: &LogicalPlan,
     items: &[ReturnItem],
     distinct: bool,
     where_predicate: Option<&Expression>,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (_input_cols, input_records) = execute_to_records(input, storage, params)?;
@@ -765,11 +775,11 @@ fn execute_with(
     Ok((columns, rows))
 }
 
-fn execute_unwind(
+fn execute_unwind<S: StorageBackend>(
     input: &LogicalPlan,
     expression: &Expression,
     alias: &str,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (mut cols, input_records) = execute_to_records(input, storage, params)?;
@@ -806,10 +816,10 @@ fn execute_unwind(
     Ok((cols, result_records))
 }
 
-fn execute_set(
+fn execute_set<S: StorageBackend>(
     input: &LogicalPlan,
     items: &[SetItem],
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (cols, mut records) = execute_to_records(input, storage, params)?;
@@ -823,10 +833,10 @@ fn execute_set(
     Ok((cols, records))
 }
 
-fn apply_set_item(
+fn apply_set_item<S: StorageBackend>(
     item: &SetItem,
     rec: &mut Record,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(), CypherError> {
     match item {
@@ -919,10 +929,10 @@ fn apply_set_item(
     Ok(())
 }
 
-fn execute_remove(
+fn execute_remove<S: StorageBackend>(
     input: &LogicalPlan,
     items: &[RemoveItem],
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (cols, mut records) = execute_to_records(input, storage, params)?;
@@ -957,11 +967,11 @@ fn execute_remove(
     Ok((cols, records))
 }
 
-fn execute_delete(
+fn execute_delete<S: StorageBackend>(
     input: &LogicalPlan,
     expressions: &[Expression],
     detach: bool,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (cols, records) = execute_to_records(input, storage, params)?;
@@ -1015,12 +1025,12 @@ fn execute_delete(
     Ok((cols, output_records))
 }
 
-fn execute_merge(
+fn execute_merge<S: StorageBackend>(
     input: &LogicalPlan,
     pattern: &PatternElement,
     on_create: Option<&[SetItem]>,
     on_match: Option<&[SetItem]>,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (mut cols, input_records) = execute_to_records(input, storage, params)?;
@@ -1109,7 +1119,7 @@ fn execute_merge(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_var_length_expand(
+fn execute_var_length_expand<S: StorageBackend>(
     input: &LogicalPlan,
     src_variable: &str,
     rel_variable: Option<&str>,
@@ -1118,7 +1128,7 @@ fn execute_var_length_expand(
     direction: &Direction,
     min_hops: u64,
     max_hops: Option<u64>,
-    storage: &mut GraphStorage,
+    storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
     let (mut cols, input_records) = execute_to_records(input, storage, params)?;
@@ -1158,26 +1168,21 @@ fn execute_var_length_expand(
                 continue;
             }
 
-            // Collect candidate edge IDs without allocating Edge objects.
-            // For Undirected we must combine two slices into a Vec; for directed we
-            // can iterate the slice directly with a small wrapper.
-            let undirected_buf: Vec<EdgeId>;
-            let candidate_ids: &[EdgeId] = match direction {
+            // Collect candidate edge IDs. The trait returns Vec<EdgeId> (owned).
+            let candidate_ids: Vec<EdgeId> = match direction {
                 Direction::Outgoing => storage.outgoing_edge_ids(cur_id),
                 Direction::Incoming => storage.incoming_edge_ids(cur_id),
                 Direction::Undirected => {
-                    let out = storage.outgoing_edge_ids(cur_id);
-                    let inc = storage.incoming_edge_ids(cur_id);
-                    undirected_buf = out.iter().chain(inc.iter()).copied().collect();
-                    &undirected_buf
+                    let mut out = storage.outgoing_edge_ids(cur_id);
+                    out.extend(storage.incoming_edge_ids(cur_id));
+                    out
                 }
             };
 
-            for &eid in candidate_ids {
+            for &eid in &candidate_ids {
                 // Resolve edge — skip stale IDs left by earlier deletes.
-                let edge = match storage.edges.get(&eid) {
-                    Some(e) => e,
-                    None => continue,
+                let Some(edge) = storage.get_edge(eid) else {
+                    continue;
                 };
 
                 // Skip edges already in the path (no repeated relationships).
@@ -1218,16 +1223,13 @@ fn execute_var_length_expand(
                             CypherValue::List(
                                 new_path
                                     .iter()
-                                    .filter_map(|id| storage.edges.get(id))
-                                    .map(|e| CypherValue::Relationship(e.clone()))
+                                    .filter_map(|id| storage.get_edge(*id))
+                                    .map(CypherValue::Relationship)
                                     .collect(),
                             ),
                         );
                     }
-                    new_rec.insert(
-                        dst_variable.to_string(),
-                        CypherValue::Node(dst_node.clone()),
-                    );
+                    new_rec.insert(dst_variable.to_string(), CypherValue::Node(dst_node));
                     result_records.push(new_rec);
                 }
 

@@ -1,0 +1,513 @@
+//! Persistent graph storage backed by [sled](https://docs.rs/sled).
+//!
+//! Enable with the `sled-storage` Cargo feature:
+//! ```toml
+//! egrph-core = { version = "...", features = ["sled-storage"] }
+//! ```
+//!
+//! # Data Layout
+//!
+//! All data is stored across six named sled Trees:
+//!
+//! | Tree | Key | Value |
+//! |------|-----|-------|
+//! | `nodes` | `NodeId` (u64 big-endian) | `Node` (bincode) |
+//! | `edges` | `EdgeId` (u64 big-endian) | `Edge` (bincode) |
+//! | `label_idx` | `"{label}\x00{node_id_be}"` | empty |
+//! | `outgoing` | `NodeId` (u64 BE) | `Vec<EdgeId>` (bincode) |
+//! | `incoming` | `NodeId` (u64 BE) | `Vec<EdgeId>` (bincode) |
+//! | `meta` | ASCII key | u64 (big-endian 8 bytes) |
+//!
+//! Writes are immediately flushed to disk via sled's ACID transaction log.
+
+use super::backend::StorageBackend;
+use super::types::{Edge, EdgeId, Node, NodeId, PropertyValue};
+use sled::Db;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// Persistent graph storage backed by sled.
+pub struct SledStorage {
+    _db: Db,
+    nodes: sled::Tree,
+    edges: sled::Tree,
+    label_idx: sled::Tree,
+    outgoing: sled::Tree,
+    incoming: sled::Tree,
+    meta: sled::Tree,
+}
+
+// ── Key helpers ──────────────────────────────────────────────────────────────
+
+fn u64_key(id: u64) -> [u8; 8] {
+    id.to_be_bytes()
+}
+
+fn label_key(label: &str, node_id: NodeId) -> Vec<u8> {
+    let mut key = label.as_bytes().to_vec();
+    key.push(0x00);
+    key.extend_from_slice(&node_id.to_be_bytes());
+    key
+}
+
+fn label_prefix(label: &str) -> Vec<u8> {
+    let mut p = label.as_bytes().to_vec();
+    p.push(0x00);
+    p
+}
+
+// ── Codec helpers ─────────────────────────────────────────────────────────────
+
+fn encode<T: serde::Serialize>(v: &T) -> Vec<u8> {
+    bincode::serialize(v).expect("bincode encode")
+}
+
+fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
+    bincode::deserialize(bytes).expect("bincode decode")
+}
+
+fn read_u64(bytes: &[u8]) -> u64 {
+    u64::from_be_bytes(bytes.try_into().expect("8-byte counter"))
+}
+
+fn write_u64(v: u64) -> [u8; 8] {
+    v.to_be_bytes()
+}
+
+// ── SledStorage impl ─────────────────────────────────────────────────────────
+
+impl SledStorage {
+    /// Open (or create) a persistent graph database at `path`.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, sled::Error> {
+        let db = sled::open(path)?;
+        let nodes = db.open_tree("nodes")?;
+        let edges = db.open_tree("edges")?;
+        let label_idx = db.open_tree("label_idx")?;
+        let outgoing = db.open_tree("outgoing")?;
+        let incoming = db.open_tree("incoming")?;
+        let meta = db.open_tree("meta")?;
+        Ok(Self {
+            _db: db,
+            nodes,
+            edges,
+            label_idx,
+            outgoing,
+            incoming,
+            meta,
+        })
+    }
+
+    fn next_node_id(&self) -> NodeId {
+        self.meta
+            .get(b"next_node_id")
+            .ok()
+            .flatten()
+            .map(|v| read_u64(&v))
+            .unwrap_or(0)
+    }
+
+    fn set_next_node_id(&self, id: NodeId) {
+        self.meta
+            .insert(b"next_node_id", &write_u64(id))
+            .expect("meta insert");
+    }
+
+    fn next_edge_id(&self) -> EdgeId {
+        self.meta
+            .get(b"next_edge_id")
+            .ok()
+            .flatten()
+            .map(|v| read_u64(&v))
+            .unwrap_or(0)
+    }
+
+    fn set_next_edge_id(&self, id: EdgeId) {
+        self.meta
+            .insert(b"next_edge_id", &write_u64(id))
+            .expect("meta insert");
+    }
+
+    fn load_adj(&self, tree: &sled::Tree, node_id: NodeId) -> Vec<EdgeId> {
+        tree.get(u64_key(node_id))
+            .ok()
+            .flatten()
+            .map(|v| decode::<Vec<EdgeId>>(&v))
+            .unwrap_or_default()
+    }
+
+    fn save_adj(&self, tree: &sled::Tree, node_id: NodeId, ids: &[EdgeId]) {
+        let ids_vec: Vec<EdgeId> = ids.to_vec();
+        tree.insert(u64_key(node_id), encode(&ids_vec))
+            .expect("adj insert");
+    }
+
+    fn append_adj(&self, tree: &sled::Tree, node_id: NodeId, edge_id: EdgeId) {
+        let mut ids = self.load_adj(tree, node_id);
+        ids.push(edge_id);
+        self.save_adj(tree, node_id, &ids);
+    }
+
+    fn remove_from_adj(&self, tree: &sled::Tree, node_id: NodeId, edge_id: EdgeId) {
+        let mut ids = self.load_adj(tree, node_id);
+        ids.retain(|&e| e != edge_id);
+        if ids.is_empty() {
+            tree.remove(u64_key(node_id)).ok();
+        } else {
+            self.save_adj(tree, node_id, &ids);
+        }
+    }
+
+    fn node_exists(&self, id: NodeId) -> bool {
+        self.nodes.contains_key(u64_key(id)).unwrap_or(false)
+    }
+}
+
+// ── StorageBackend ─────────────────────────────────────────────────────────────
+
+impl StorageBackend for SledStorage {
+    fn create_node(
+        &mut self,
+        labels: Vec<String>,
+        properties: HashMap<String, PropertyValue>,
+    ) -> NodeId {
+        let id = self.next_node_id();
+        let node = Node {
+            id,
+            labels: labels.clone(),
+            properties,
+        };
+        self.nodes
+            .insert(u64_key(id), encode(&node))
+            .expect("node insert");
+        for label in &labels {
+            self.label_idx
+                .insert(label_key(label, id), b"")
+                .expect("label idx insert");
+        }
+        self.set_next_node_id(id + 1);
+        id
+    }
+
+    fn create_edge(
+        &mut self,
+        label: String,
+        src: NodeId,
+        dst: NodeId,
+        properties: HashMap<String, PropertyValue>,
+    ) -> Result<EdgeId, String> {
+        if !self.node_exists(src) {
+            return Err(format!("Source node {} not found", src));
+        }
+        if !self.node_exists(dst) {
+            return Err(format!("Destination node {} not found", dst));
+        }
+        let id = self.next_edge_id();
+        let edge = Edge {
+            id,
+            label,
+            src,
+            dst,
+            properties,
+        };
+        self.edges
+            .insert(u64_key(id), encode(&edge))
+            .expect("edge insert");
+        self.append_adj(&self.outgoing.clone(), src, id);
+        self.append_adj(&self.incoming.clone(), dst, id);
+        self.set_next_edge_id(id + 1);
+        Ok(id)
+    }
+
+    fn get_node(&self, id: NodeId) -> Option<Node> {
+        self.nodes.get(u64_key(id)).ok()?.map(|v| decode(&v))
+    }
+
+    fn get_edge(&self, id: EdgeId) -> Option<Edge> {
+        self.edges.get(u64_key(id)).ok()?.map(|v| decode(&v))
+    }
+
+    fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn edge_count(&self) -> usize {
+        self.edges.len()
+    }
+
+    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Edge> {
+        self.outgoing_edge_ids(node_id)
+            .into_iter()
+            .filter_map(|id| self.get_edge(id))
+            .collect()
+    }
+
+    fn incoming_edges(&self, node_id: NodeId) -> Vec<Edge> {
+        self.incoming_edge_ids(node_id)
+            .into_iter()
+            .filter_map(|id| self.get_edge(id))
+            .collect()
+    }
+
+    fn outgoing_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId> {
+        self.load_adj(&self.outgoing, node_id)
+    }
+
+    fn incoming_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId> {
+        self.load_adj(&self.incoming, node_id)
+    }
+
+    fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
+        match label {
+            None => self
+                .nodes
+                .iter()
+                .filter_map(|r| r.ok())
+                .map(|(_, v)| decode(&v))
+                .collect(),
+            Some(l) => {
+                let prefix = label_prefix(l);
+                self.label_idx
+                    .scan_prefix(&prefix)
+                    .filter_map(|r| r.ok())
+                    .filter_map(|(k, _)| {
+                        let id_bytes = k.get(prefix.len()..)?;
+                        if id_bytes.len() != 8 {
+                            return None;
+                        }
+                        let id = u64::from_be_bytes(id_bytes.try_into().ok()?);
+                        self.get_node(id)
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn find_node(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Option<NodeId> {
+        self.find_nodes(labels, properties).into_iter().next()
+    }
+
+    fn find_nodes(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Vec<NodeId> {
+        let candidates: Vec<Node> = if let Some(first) = labels.first() {
+            let prefix = label_prefix(first);
+            self.label_idx
+                .scan_prefix(&prefix)
+                .filter_map(|r| r.ok())
+                .filter_map(|(k, _)| {
+                    let id_bytes = k.get(prefix.len()..)?;
+                    if id_bytes.len() != 8 {
+                        return None;
+                    }
+                    let id = u64::from_be_bytes(id_bytes.try_into().ok()?);
+                    self.get_node(id)
+                })
+                .collect()
+        } else {
+            self.nodes
+                .iter()
+                .filter_map(|r| r.ok())
+                .map(|(_, v)| decode(&v))
+                .collect()
+        };
+
+        candidates
+            .into_iter()
+            .filter(|node| {
+                let labels_match = labels.iter().all(|l| node.labels.contains(l));
+                if !labels_match {
+                    return false;
+                }
+                properties.iter().all(|(key, val)| {
+                    node.properties
+                        .get(key)
+                        .map(|v| property_values_equal(v, val))
+                        .unwrap_or(false)
+                })
+            })
+            .map(|n| n.id)
+            .collect()
+    }
+
+    fn all_node_ids(&self) -> Vec<NodeId> {
+        let mut ids: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter_map(|r| r.ok())
+            .map(|(k, _)| u64::from_be_bytes(k.as_ref().try_into().unwrap_or([0u8; 8])))
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    fn all_edge_ids(&self) -> Vec<EdgeId> {
+        let mut ids: Vec<EdgeId> = self
+            .edges
+            .iter()
+            .filter_map(|r| r.ok())
+            .map(|(k, _)| u64::from_be_bytes(k.as_ref().try_into().unwrap_or([0u8; 8])))
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
+        if let Some(mut node) = self.get_node(id) {
+            node.properties.insert(key, value);
+            self.nodes.insert(u64_key(id), encode(&node)).ok();
+        }
+    }
+
+    fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
+        if let Some(mut edge) = self.get_edge(id) {
+            edge.properties.insert(key, value);
+            self.edges.insert(u64_key(id), encode(&edge)).ok();
+        }
+    }
+
+    fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
+        if let Some(mut node) = self.get_node(id) {
+            node.properties = properties;
+            self.nodes.insert(u64_key(id), encode(&node)).ok();
+        }
+    }
+
+    fn set_edge_all_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
+        if let Some(mut edge) = self.get_edge(id) {
+            edge.properties = properties;
+            self.edges.insert(u64_key(id), encode(&edge)).ok();
+        }
+    }
+
+    fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
+        if let Some(mut node) = self.get_node(id) {
+            for (k, v) in properties {
+                node.properties.insert(k, v);
+            }
+            self.nodes.insert(u64_key(id), encode(&node)).ok();
+        }
+    }
+
+    fn merge_edge_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
+        if let Some(mut edge) = self.get_edge(id) {
+            for (k, v) in properties {
+                edge.properties.insert(k, v);
+            }
+            self.edges.insert(u64_key(id), encode(&edge)).ok();
+        }
+    }
+
+    fn add_node_labels(&mut self, id: NodeId, labels: &[String]) {
+        if let Some(mut node) = self.get_node(id) {
+            for label in labels {
+                if !node.labels.contains(label) {
+                    node.labels.push(label.clone());
+                    self.label_idx
+                        .insert(label_key(label, id), b"")
+                        .expect("label idx insert");
+                }
+            }
+            self.nodes.insert(u64_key(id), encode(&node)).ok();
+        }
+    }
+
+    fn remove_node_property(&mut self, id: NodeId, key: &str) {
+        if let Some(mut node) = self.get_node(id) {
+            node.properties.remove(key);
+            self.nodes.insert(u64_key(id), encode(&node)).ok();
+        }
+    }
+
+    fn remove_node_labels(&mut self, id: NodeId, labels: &[String]) {
+        if let Some(mut node) = self.get_node(id) {
+            for label in labels {
+                node.labels.retain(|l| l != label);
+                self.label_idx.remove(label_key(label, id)).ok();
+            }
+            self.nodes.insert(u64_key(id), encode(&node)).ok();
+        }
+    }
+
+    fn remove_edge_property(&mut self, id: EdgeId, key: &str) {
+        if let Some(mut edge) = self.get_edge(id) {
+            edge.properties.remove(key);
+            self.edges.insert(u64_key(id), encode(&edge)).ok();
+        }
+    }
+
+    fn delete_node(&mut self, id: NodeId, detach: bool) -> Result<(), String> {
+        if !self.node_exists(id) {
+            return Err(format!("Node {} not found", id));
+        }
+
+        let out_ids = self.outgoing_edge_ids(id);
+        let inc_ids = self.incoming_edge_ids(id);
+
+        let has_edges = out_ids.iter().any(|&eid| self.get_edge(eid).is_some())
+            || inc_ids.iter().any(|&eid| self.get_edge(eid).is_some());
+
+        if !detach && has_edges {
+            return Err(format!(
+                "Cannot delete node {} because it still has relationships. Use DETACH DELETE.",
+                id
+            ));
+        }
+
+        if detach {
+            let mut all_eids: std::collections::HashSet<EdgeId> = std::collections::HashSet::new();
+            all_eids.extend(out_ids.iter().copied());
+            all_eids.extend(inc_ids.iter().copied());
+
+            for eid in all_eids {
+                if let Some(edge) = self.get_edge(eid) {
+                    self.edges.remove(u64_key(eid)).ok();
+                    if edge.src != id {
+                        self.remove_from_adj(&self.outgoing.clone(), edge.src, eid);
+                    }
+                    if edge.dst != id {
+                        self.remove_from_adj(&self.incoming.clone(), edge.dst, eid);
+                    }
+                }
+            }
+        }
+
+        self.outgoing.remove(u64_key(id)).ok();
+        self.incoming.remove(u64_key(id)).ok();
+
+        if let Some(node) = self.get_node(id) {
+            for label in &node.labels {
+                self.label_idx.remove(label_key(label, id)).ok();
+            }
+        }
+
+        self.nodes.remove(u64_key(id)).ok();
+        Ok(())
+    }
+
+    fn delete_edge(&mut self, id: EdgeId) -> Result<(), String> {
+        if let Some(edge) = self.get_edge(id) {
+            self.edges.remove(u64_key(id)).ok();
+            self.remove_from_adj(&self.outgoing.clone(), edge.src, id);
+            self.remove_from_adj(&self.incoming.clone(), edge.dst, id);
+            Ok(())
+        } else {
+            Err(format!("Edge {} not found", id))
+        }
+    }
+}
+
+fn property_values_equal(a: &PropertyValue, b: &PropertyValue) -> bool {
+    match (a, b) {
+        (PropertyValue::String(a), PropertyValue::String(b)) => a == b,
+        (PropertyValue::Int(a), PropertyValue::Int(b)) => a == b,
+        (PropertyValue::Float(a), PropertyValue::Float(b)) => a == b,
+        (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a == b,
+        _ => false,
+    }
+}

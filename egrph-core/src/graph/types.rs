@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub type NodeId = u64;
 pub type EdgeId = u64;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PropertyValue {
     String(String),
     Int(i64),
@@ -11,14 +12,14 @@ pub enum PropertyValue {
     Bool(bool),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
     pub labels: Vec<String>,
     pub properties: HashMap<String, PropertyValue>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     pub id: EdgeId,
     pub label: String,
@@ -27,7 +28,7 @@ pub struct Edge {
     pub properties: HashMap<String, PropertyValue>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Path {
     pub nodes: Vec<Node>,
     pub relationships: Vec<Edge>,

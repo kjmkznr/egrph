@@ -1,27 +1,38 @@
+pub mod backend;
+#[cfg(feature = "sled-storage")]
+pub mod sled_storage;
 pub mod storage;
 pub mod types;
 
-use self::storage::GraphStorage;
+use self::backend::StorageBackend;
+use self::storage::MemoryStorage;
 use self::types::*;
 use crate::error::CypherError;
 use crate::executor::result::QueryResult;
 use std::collections::HashMap;
 
-pub struct Graph {
-    pub(crate) storage: GraphStorage,
+pub struct Graph<S: StorageBackend = MemoryStorage> {
+    pub(crate) storage: S,
 }
 
-impl Default for Graph {
+impl Default for Graph<MemoryStorage> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Graph {
+impl Graph<MemoryStorage> {
     pub fn new() -> Self {
         Graph {
-            storage: GraphStorage::new(),
+            storage: MemoryStorage::new(),
         }
+    }
+}
+
+impl<S: StorageBackend> Graph<S> {
+    /// Construct a `Graph` backed by an arbitrary `StorageBackend`.
+    pub fn new_with_storage(storage: S) -> Self {
+        Graph { storage }
     }
 
     /// New primary entry point: parse, plan, and execute a Cypher query.
@@ -78,15 +89,15 @@ impl Graph {
         self.storage.create_edge(label, src, dst, properties)
     }
 
-    pub fn get_node(&self, id: NodeId) -> Option<&Node> {
+    pub fn get_node(&self, id: NodeId) -> Option<Node> {
         self.storage.get_node(id)
     }
 
-    pub fn get_edge(&self, id: EdgeId) -> Option<&Edge> {
+    pub fn get_edge(&self, id: EdgeId) -> Option<Edge> {
         self.storage.get_edge(id)
     }
 
-    pub fn match_nodes(&self, label: Option<&str>) -> Vec<&Node> {
+    pub fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
         self.storage.match_nodes(label)
     }
 
@@ -100,39 +111,37 @@ impl Graph {
 
     /// Export the entire graph as a Cypher CREATE statement that can be used to recreate it.
     pub fn export_cypher(&self) -> String {
-        if self.storage.nodes.is_empty() {
+        let node_ids = self.storage.all_node_ids();
+        if node_ids.is_empty() {
             return String::new();
         }
 
         let mut parts: Vec<String> = Vec::new();
 
-        let mut node_ids: Vec<NodeId> = self.storage.nodes.keys().copied().collect();
-        node_ids.sort();
-
         for id in &node_ids {
-            let node = &self.storage.nodes[id];
-            let var = format!("_{}", id);
-            let labels = if node.labels.is_empty() {
-                String::new()
-            } else {
-                format!(":{}", node.labels.join(":"))
-            };
-            let props = format_properties(&node.properties);
-            parts.push(format!("({var}{labels}{props})"));
+            if let Some(node) = self.storage.get_node(*id) {
+                let var = format!("_{}", id);
+                let labels = if node.labels.is_empty() {
+                    String::new()
+                } else {
+                    format!(":{}", node.labels.join(":"))
+                };
+                let props = format_properties(&node.properties);
+                parts.push(format!("({var}{labels}{props})"));
+            }
         }
 
-        let mut edge_ids: Vec<EdgeId> = self.storage.edges.keys().copied().collect();
-        edge_ids.sort();
-
+        let edge_ids = self.storage.all_edge_ids();
         for id in &edge_ids {
-            let edge = &self.storage.edges[id];
-            let src_var = format!("_{}", edge.src);
-            let dst_var = format!("_{}", edge.dst);
-            let props = format_properties(&edge.properties);
-            parts.push(format!(
-                "({src_var})-[:{label}{props}]->({dst_var})",
-                label = edge.label
-            ));
+            if let Some(edge) = self.storage.get_edge(*id) {
+                let src_var = format!("_{}", edge.src);
+                let dst_var = format!("_{}", edge.dst);
+                let props = format_properties(&edge.properties);
+                parts.push(format!(
+                    "({src_var})-[:{label}{props}]->({dst_var})",
+                    label = edge.label
+                ));
+            }
         }
 
         format!("CREATE\n  {}", parts.join(",\n  "))

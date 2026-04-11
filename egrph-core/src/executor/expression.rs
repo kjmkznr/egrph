@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::error::CypherError;
-use crate::graph::storage::GraphStorage;
+use crate::graph::backend::StorageBackend;
 use crate::graph::types::*;
 use regex::Regex;
 use std::cell::RefCell;
@@ -26,7 +26,7 @@ pub fn eval_with_params(
     expr: &Expression,
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     Ok(match expr {
         Expression::Literal(lit) => eval_literal(lit, record, params, storage)?,
@@ -171,7 +171,7 @@ fn eval_literal(
     lit: &Literal,
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     Ok(match lit {
         Literal::Integer(i) => CypherValue::Integer(*i),
@@ -583,7 +583,7 @@ fn eval_case(
     default: Option<&Expression>,
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     match operand {
         Some(op_expr) => {
@@ -622,7 +622,7 @@ fn eval_list_comprehension(
     map_expr: Option<&Expression>,
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     let list_val = eval_with_params(list, record, params, storage)?;
     Ok(match list_val {
@@ -664,7 +664,7 @@ fn eval_filter_predicate(
     predicate: &Expression,
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     let list_val = eval_with_params(list, record, params, storage)?;
     Ok(match list_val {
@@ -746,7 +746,7 @@ fn eval_reduce(
     body: &Expression,
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     let list_val = eval_with_params(list, record, params, storage)?;
     let init_val = eval_with_params(init, record, params, storage)?;
@@ -773,7 +773,7 @@ fn eval_function(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     let lower = name.to_lowercase();
     Ok(match lower.as_str() {
@@ -1384,7 +1384,7 @@ fn string_fn_1(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
     f: impl Fn(&str) -> String,
 ) -> Result<CypherValue, CypherError> {
     if let Some(arg) = args.first() {
@@ -1404,7 +1404,7 @@ fn math_fn_1_f64(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
     f: impl Fn(f64) -> f64,
 ) -> Result<CypherValue, CypherError> {
     if let Some(arg) = args.first() {
@@ -1423,7 +1423,7 @@ fn math_fn_1(
     args: &[Expression],
     record: &Record,
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
     f: impl Fn(CypherValue) -> CypherValue,
 ) -> Result<CypherValue, CypherError> {
     if let Some(arg) = args.first() {

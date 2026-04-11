@@ -9,7 +9,19 @@ pub mod planner;
 pub use error::CypherError;
 pub use executor::result::QueryResult;
 pub use graph::Graph;
+pub use graph::backend::StorageBackend;
+pub use graph::storage::MemoryStorage;
 pub use graph::types::{CypherValue, Edge, EdgeId, Node, NodeId, Path, PropertyValue};
+
+/// Default in-memory graph (backward-compatible alias).
+pub type InMemoryGraph = graph::Graph<MemoryStorage>;
+
+#[cfg(feature = "sled-storage")]
+pub use graph::sled_storage::SledStorage;
+
+/// Persistent graph backed by sled (requires the `sled-storage` feature).
+#[cfg(feature = "sled-storage")]
+pub type PersistentGraph = graph::Graph<SledStorage>;
 
 #[cfg(test)]
 mod tests {
@@ -1936,5 +1948,72 @@ mod tests {
             .unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].values[0], CypherValue::List(vec![]));
+    }
+
+    #[cfg(feature = "sled-storage")]
+    mod sled_tests {
+        use super::*;
+        use crate::SledStorage;
+        use crate::graph::Graph;
+        use tempfile::tempdir;
+
+        #[test]
+        fn test_sled_persist_roundtrip() {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("graph.sled");
+
+            // Write phase
+            {
+                let storage = SledStorage::open(&path).unwrap();
+                let mut g = Graph::new_with_storage(storage);
+                g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+                    .unwrap();
+                g.execute("CREATE (:Person {name: \"Bob\", age: 25})")
+                    .unwrap();
+            }
+
+            // Reopen and read phase
+            {
+                let storage = SledStorage::open(&path).unwrap();
+                let mut g = Graph::new_with_storage(storage);
+                let result = g.execute("MATCH (p:Person) RETURN p.name").unwrap();
+                assert_eq!(result.rows.len(), 2);
+            }
+        }
+
+        #[test]
+        fn test_sled_edge_persist() {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("edge_graph.sled");
+
+            {
+                let storage = SledStorage::open(&path).unwrap();
+                let mut g = Graph::new_with_storage(storage);
+                g.execute("CREATE (:Person {name: \"Alice\"})-[:KNOWS]->(:Person {name: \"Bob\"})")
+                    .unwrap();
+            }
+
+            {
+                let storage = SledStorage::open(&path).unwrap();
+                let mut g = Graph::new_with_storage(storage);
+                let result = g
+                    .execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
+                    .unwrap();
+                assert_eq!(result.rows.len(), 1);
+            }
+        }
+
+        #[test]
+        fn test_sled_export_cypher() {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("export.sled");
+
+            let storage = SledStorage::open(&path).unwrap();
+            let mut g = Graph::new_with_storage(storage);
+            g.execute("CREATE (:Foo {x: 1})").unwrap();
+            let cypher = g.export_cypher();
+            assert!(cypher.contains("Foo"));
+            assert!(cypher.contains("x: 1"));
+        }
     }
 }
