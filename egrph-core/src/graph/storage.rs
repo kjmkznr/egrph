@@ -1,8 +1,9 @@
+use super::backend::StorageBackend;
 use super::types::{Edge, EdgeId, Node, NodeId, PropertyValue};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
-pub struct GraphStorage {
+pub struct MemoryStorage {
     pub(crate) nodes: HashMap<NodeId, Node>,
     pub(crate) edges: HashMap<EdgeId, Edge>,
     pub(crate) outgoing: HashMap<NodeId, Vec<EdgeId>>,
@@ -13,12 +14,17 @@ pub struct GraphStorage {
     next_edge_id: EdgeId,
 }
 
-impl GraphStorage {
+/// Backward-compatible alias used within this crate.
+pub type GraphStorage = MemoryStorage;
+
+impl MemoryStorage {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
-    pub fn create_node(
+impl StorageBackend for MemoryStorage {
+    fn create_node(
         &mut self,
         labels: Vec<String>,
         properties: HashMap<String, PropertyValue>,
@@ -40,7 +46,7 @@ impl GraphStorage {
         id
     }
 
-    pub fn create_edge(
+    fn create_edge(
         &mut self,
         label: String,
         src: NodeId,
@@ -69,219 +75,68 @@ impl GraphStorage {
         Ok(id)
     }
 
-    pub fn get_node(&self, id: NodeId) -> Option<&Node> {
-        self.nodes.get(&id)
+    fn get_node(&self, id: NodeId) -> Option<Node> {
+        self.nodes.get(&id).cloned()
     }
 
-    pub fn get_edge(&self, id: EdgeId) -> Option<&Edge> {
-        self.edges.get(&id)
+    fn get_edge(&self, id: EdgeId) -> Option<Edge> {
+        self.edges.get(&id).cloned()
     }
 
-    pub fn node_count(&self) -> usize {
+    fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
-    pub fn edge_count(&self) -> usize {
+    fn edge_count(&self) -> usize {
         self.edges.len()
     }
 
-    pub fn outgoing_edges(&self, node_id: NodeId) -> Vec<&Edge> {
+    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Edge> {
         self.outgoing
             .get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| self.edges.get(id).cloned())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
-    pub fn incoming_edges(&self, node_id: NodeId) -> Vec<&Edge> {
+    fn incoming_edges(&self, node_id: NodeId) -> Vec<Edge> {
         self.incoming
             .get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| self.edges.get(id).cloned())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
-    /// Return the raw outgoing edge ID slice for a node — no allocation.
-    pub fn outgoing_edge_ids(&self, node_id: NodeId) -> &[EdgeId] {
-        self.outgoing.get(&node_id).map_or(&[], |v| v.as_slice())
+    fn outgoing_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId> {
+        self.outgoing.get(&node_id).cloned().unwrap_or_default()
     }
 
-    /// Return the raw incoming edge ID slice for a node — no allocation.
-    pub fn incoming_edge_ids(&self, node_id: NodeId) -> &[EdgeId] {
-        self.incoming.get(&node_id).map_or(&[], |v| v.as_slice())
+    fn incoming_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId> {
+        self.incoming.get(&node_id).cloned().unwrap_or_default()
     }
 
-    pub fn match_nodes(&self, label: Option<&str>) -> Vec<&Node> {
+    fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
         match label {
-            None => self.nodes.values().collect(),
+            None => self.nodes.values().cloned().collect(),
             Some(l) => self
                 .label_index
                 .get(l)
-                .map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)).collect())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|id| self.nodes.get(id).cloned())
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }
 
-    // --- Mutation methods for SET/REMOVE/DELETE/MERGE ---
-
-    pub fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.properties.insert(key, value);
-        }
-    }
-
-    pub fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
-        if let Some(edge) = self.edges.get_mut(&id) {
-            edge.properties.insert(key, value);
-        }
-    }
-
-    pub fn set_node_all_properties(
-        &mut self,
-        id: NodeId,
-        properties: HashMap<String, PropertyValue>,
-    ) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.properties = properties;
-        }
-    }
-
-    pub fn merge_node_properties(
-        &mut self,
-        id: NodeId,
-        properties: HashMap<String, PropertyValue>,
-    ) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            for (k, v) in properties {
-                node.properties.insert(k, v);
-            }
-        }
-    }
-
-    pub fn add_node_labels(&mut self, id: NodeId, labels: &[String]) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            for label in labels {
-                if !node.labels.contains(label) {
-                    node.labels.push(label.clone());
-                    self.label_index
-                        .entry(label.clone())
-                        .or_default()
-                        .insert(id);
-                }
-            }
-        }
-    }
-
-    pub fn remove_node_property(&mut self, id: NodeId, key: &str) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.properties.remove(key);
-        }
-    }
-
-    pub fn remove_node_labels(&mut self, id: NodeId, labels: &[String]) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            for label in labels {
-                node.labels.retain(|l| l != label);
-                if let Some(set) = self.label_index.get_mut(label) {
-                    set.remove(&id);
-                }
-            }
-        }
-    }
-
-    pub fn delete_node(&mut self, id: NodeId, detach: bool) -> Result<(), String> {
-        if !self.nodes.contains_key(&id) {
-            return Err(format!("Node {} not found", id));
-        }
-
-        // Check only edge IDs that actually exist in self.edges (adjacency lists may
-        // contain stale IDs left over from earlier deletes).
-        let has_outgoing = self
-            .outgoing
-            .get(&id)
-            .map(|v| v.iter().any(|eid| self.edges.contains_key(eid)))
-            .unwrap_or(false);
-        let has_incoming = self
-            .incoming
-            .get(&id)
-            .map(|v| v.iter().any(|eid| self.edges.contains_key(eid)))
-            .unwrap_or(false);
-
-        if !detach && (has_outgoing || has_incoming) {
-            return Err(format!(
-                "Cannot delete node {} because it still has relationships. Use DETACH DELETE.",
-                id
-            ));
-        }
-
-        if detach {
-            // Collect all edge IDs incident to this node (outgoing + incoming),
-            // deduplicating to handle self-loops correctly.
-            // Use HashSet for O(E) deduplication instead of O(E²) Vec::contains.
-            let mut edge_ids: HashSet<EdgeId> = HashSet::new();
-            if let Some(out) = self.outgoing.get(&id) {
-                edge_ids.extend(out.iter().copied());
-            }
-            if let Some(inc) = self.incoming.get(&id) {
-                edge_ids.extend(inc.iter().copied());
-            }
-
-            for eid in edge_ids {
-                if let Some(edge) = self.edges.remove(&eid) {
-                    if edge.src != id
-                        && let Some(out) = self.outgoing.get_mut(&edge.src)
-                    {
-                        out.retain(|e| *e != eid);
-                    }
-                    if edge.dst != id
-                        && let Some(inc) = self.incoming.get_mut(&edge.dst)
-                    {
-                        inc.retain(|e| *e != eid);
-                    }
-                }
-            }
-        }
-
-        // Remove adjacency list entries for this node regardless of detach mode.
-        // (If detach=false we already confirmed there are no live edges above.)
-        self.outgoing.remove(&id);
-        self.incoming.remove(&id);
-
-        // Remove node from label index. Clone labels first to release the
-        // immutable borrow on self.nodes before mutably borrowing self.label_index.
-        let labels: Vec<String> = self
-            .nodes
-            .get(&id)
-            .map(|n| n.labels.clone())
-            .unwrap_or_default();
-        for label in &labels {
-            if let Some(set) = self.label_index.get_mut(label) {
-                set.remove(&id);
-            }
-        }
-
-        self.nodes.remove(&id);
-        Ok(())
-    }
-
-    pub fn delete_edge(&mut self, id: EdgeId) -> Result<(), String> {
-        if let Some(edge) = self.edges.remove(&id) {
-            if let Some(out) = self.outgoing.get_mut(&edge.src) {
-                out.retain(|e| *e != id);
-            }
-            if let Some(inc) = self.incoming.get_mut(&edge.dst) {
-                inc.retain(|e| *e != id);
-            }
-            Ok(())
-        } else {
-            Err(format!("Edge {} not found", id))
-        }
-    }
-
-    /// Find a node that matches all given labels and properties.
-    ///
-    /// When `labels` is non-empty the label index is used to narrow the candidate
-    /// set to O(|matching nodes|). When `labels` is empty **all** nodes are
-    /// scanned in O(|nodes|) — avoid calling with an empty label list on large graphs.
-    pub fn find_node(
+    fn find_node(
         &self,
         labels: &[String],
         properties: &HashMap<String, PropertyValue>,
@@ -289,15 +144,11 @@ impl GraphStorage {
         self.find_nodes(labels, properties).into_iter().next()
     }
 
-    /// Return **all** node IDs that match the given labels and properties.
-    ///
-    /// MERGE needs this to apply ON MATCH to every existing matching node, not just the first.
-    pub fn find_nodes(
+    fn find_nodes(
         &self,
         labels: &[String],
         properties: &HashMap<String, PropertyValue>,
     ) -> Vec<NodeId> {
-        // Use the label index to narrow candidates when labels are present
         let candidates: Vec<NodeId> = if let Some(first_label) = labels.first() {
             match self.label_index.get(first_label) {
                 Some(ids) => ids.iter().copied().collect(),
@@ -328,23 +179,51 @@ impl GraphStorage {
             .collect()
     }
 
-    /// Replace all properties on an edge.
-    pub fn set_edge_all_properties(
-        &mut self,
-        id: EdgeId,
-        properties: HashMap<String, PropertyValue>,
-    ) {
+    fn all_node_ids(&self) -> Vec<NodeId> {
+        let mut ids: Vec<NodeId> = self.nodes.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    fn all_edge_ids(&self) -> Vec<EdgeId> {
+        let mut ids: Vec<EdgeId> = self.edges.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.properties.insert(key, value);
+        }
+    }
+
+    fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
+        if let Some(edge) = self.edges.get_mut(&id) {
+            edge.properties.insert(key, value);
+        }
+    }
+
+    fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.properties = properties;
+        }
+    }
+
+    fn set_edge_all_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
         if let Some(edge) = self.edges.get_mut(&id) {
             edge.properties = properties;
         }
     }
 
-    /// Merge properties into an edge.
-    pub fn merge_edge_properties(
-        &mut self,
-        id: EdgeId,
-        properties: HashMap<String, PropertyValue>,
-    ) {
+    fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            for (k, v) in properties {
+                node.properties.insert(k, v);
+            }
+        }
+    }
+
+    fn merge_edge_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
         if let Some(edge) = self.edges.get_mut(&id) {
             for (k, v) in properties {
                 edge.properties.insert(k, v);
@@ -352,10 +231,120 @@ impl GraphStorage {
         }
     }
 
-    /// Remove a property from an edge.
-    pub fn remove_edge_property(&mut self, id: EdgeId, key: &str) {
+    fn add_node_labels(&mut self, id: NodeId, labels: &[String]) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            for label in labels {
+                if !node.labels.contains(label) {
+                    node.labels.push(label.clone());
+                    self.label_index
+                        .entry(label.clone())
+                        .or_default()
+                        .insert(id);
+                }
+            }
+        }
+    }
+
+    fn remove_node_property(&mut self, id: NodeId, key: &str) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.properties.remove(key);
+        }
+    }
+
+    fn remove_node_labels(&mut self, id: NodeId, labels: &[String]) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            for label in labels {
+                node.labels.retain(|l| l != label);
+                if let Some(set) = self.label_index.get_mut(label) {
+                    set.remove(&id);
+                }
+            }
+        }
+    }
+
+    fn remove_edge_property(&mut self, id: EdgeId, key: &str) {
         if let Some(edge) = self.edges.get_mut(&id) {
             edge.properties.remove(key);
+        }
+    }
+
+    fn delete_node(&mut self, id: NodeId, detach: bool) -> Result<(), String> {
+        if !self.nodes.contains_key(&id) {
+            return Err(format!("Node {} not found", id));
+        }
+
+        let has_outgoing = self
+            .outgoing
+            .get(&id)
+            .map(|v| v.iter().any(|eid| self.edges.contains_key(eid)))
+            .unwrap_or(false);
+        let has_incoming = self
+            .incoming
+            .get(&id)
+            .map(|v| v.iter().any(|eid| self.edges.contains_key(eid)))
+            .unwrap_or(false);
+
+        if !detach && (has_outgoing || has_incoming) {
+            return Err(format!(
+                "Cannot delete node {} because it still has relationships. Use DETACH DELETE.",
+                id
+            ));
+        }
+
+        if detach {
+            let mut edge_ids: HashSet<EdgeId> = HashSet::new();
+            if let Some(out) = self.outgoing.get(&id) {
+                edge_ids.extend(out.iter().copied());
+            }
+            if let Some(inc) = self.incoming.get(&id) {
+                edge_ids.extend(inc.iter().copied());
+            }
+
+            for eid in edge_ids {
+                if let Some(edge) = self.edges.remove(&eid) {
+                    if edge.src != id
+                        && let Some(out) = self.outgoing.get_mut(&edge.src)
+                    {
+                        out.retain(|e| *e != eid);
+                    }
+                    if edge.dst != id
+                        && let Some(inc) = self.incoming.get_mut(&edge.dst)
+                    {
+                        inc.retain(|e| *e != eid);
+                    }
+                }
+            }
+        }
+
+        self.outgoing.remove(&id);
+        self.incoming.remove(&id);
+
+        let labels: Vec<String> = self
+            .nodes
+            .get(&id)
+            .map(|n| n.labels.clone())
+            .unwrap_or_default();
+        for label in &labels {
+            if let Some(set) = self.label_index.get_mut(label) {
+                set.remove(&id);
+            }
+        }
+
+        self.nodes.remove(&id);
+        Ok(())
+    }
+
+    fn delete_edge(&mut self, id: EdgeId) -> Result<(), String> {
+        if let Some(edge) = self.edges.remove(&id) {
+            if let Some(out) = self.outgoing.get_mut(&edge.src) {
+                out.retain(|e| *e != id);
+            }
+            if let Some(inc) = self.incoming.get_mut(&edge.dst) {
+                inc.retain(|e| *e != id);
+            }
+            Ok(())
+        } else {
+            Err(format!("Edge {} not found", id))
         }
     }
 }

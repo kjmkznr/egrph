@@ -3,7 +3,7 @@ use super::expression::{
 };
 use crate::ast::{Expression, ReturnItem};
 use crate::error::CypherError;
-use crate::graph::storage::GraphStorage;
+use crate::graph::backend::StorageBackend;
 use crate::graph::types::CypherValue;
 use std::collections::HashMap;
 
@@ -125,7 +125,7 @@ pub fn execute_aggregation(
     input_records: &[Record],
     columns: &[String],
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<Vec<Record>, CypherError> {
     // Separate grouping keys from aggregate items
     let group_indices: Vec<usize> = items
@@ -211,7 +211,7 @@ fn compute_aggregate(
     expr: &Expression,
     records: &[&Record],
     params: &Parameters,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<CypherValue, CypherError> {
     match expr {
         Expression::FunctionCall {
@@ -337,7 +337,7 @@ fn collect_non_null_values(
     records: &[&Record],
     params: &Parameters,
     distinct: bool,
-    storage: &GraphStorage,
+    storage: &dyn StorageBackend,
 ) -> Result<Vec<CypherValue>, CypherError> {
     let mut vals: Vec<CypherValue> = Vec::new();
     for rec in records {
