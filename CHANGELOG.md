@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-11
+
+### Added
+
+- `StorageBackend` トレイトによるプラガブルなストレージバックエンド抽象化を追加。デフォルトはこれまで通りのインメモリ実装。
+- `sled` ベースの永続化ストレージバックエンドを追加（オプション feature: `sled-storage`）。
+- `UNION` / `UNION ALL` のサポートを追加。
+- `Graph::execute_with_params()`: パラメータ付きクエリ API を追加。
+
+### Changed
+
+- `egrph-c-abi` および `egrph-python` のライブラリターゲット名をよりわかりやすい名前にリネーム。
+- `extension-module` feature を依存関係側からクレートレベルの定義に移動。
+
 ## [0.1.1] - 2026-04-09
 
 ### Added
