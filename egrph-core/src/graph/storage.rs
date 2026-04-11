@@ -114,17 +114,11 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn outgoing_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId> {
-        self.outgoing
-            .get(&node_id)
-            .cloned()
-            .unwrap_or_default()
+        self.outgoing.get(&node_id).cloned().unwrap_or_default()
     }
 
     fn incoming_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId> {
-        self.incoming
-            .get(&node_id)
-            .cloned()
-            .unwrap_or_default()
+        self.incoming.get(&node_id).cloned().unwrap_or_default()
     }
 
     fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
