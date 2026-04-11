@@ -106,10 +106,10 @@ jobs:
       - name: Build C ABI
         run: cargo build --release -p egrph-c-abi
       - name: Stage C ABI library for cgo
-        # egrph-go/egrph.go specifies `#cgo LDFLAGS: -L../egrph-c-abi -legrph`.
-        # Cargo outputs libegrph.{a,so} into target/release/; copy them to the
+        # egrph-go/egrph.go specifies `#cgo LDFLAGS: -L../egrph-c-abi -legrph_c`.
+        # Cargo outputs libegrph_c.{a,so} into target/release/; copy them to the
         # directory the linker flag points to so cgo can find them.
-        run: cp target/release/libegrph.a target/release/libegrph.so egrph-c-abi/
+        run: cp target/release/libegrph_c.a target/release/libegrph_c.so egrph-c-abi/
       - name: Run Go tests
         working-directory: egrph-go
         env:

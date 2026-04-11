@@ -1,7 +1,7 @@
 package egrph
 
 /*
-#cgo LDFLAGS: -L../egrph-c-abi -legrph
+#cgo LDFLAGS: -L../egrph-c-abi -legrph_c
 #include <stdlib.h>
 
 typedef struct CGraph CGraph;
