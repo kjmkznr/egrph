@@ -1,6 +1,6 @@
 use crate::ast::{
-    Direction, Expression, NodePattern, PatternChainElement, PatternElement, RemoveItem,
-    ReturnItem, SetItem, SortItem,
+    ConstraintType, Direction, Expression, NodePattern, PatternChainElement, PatternElement,
+    RemoveItem, ReturnItem, SetItem, SortItem,
 };
 
 #[derive(Debug, Clone)]
@@ -142,5 +142,12 @@ pub enum LogicalPlan {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
         all: bool,
+    },
+
+    /// CREATE CONSTRAINT: register a constraint on the storage layer.
+    CreateConstraint {
+        label: String,
+        property: String,
+        constraint_type: ConstraintType,
     },
 }

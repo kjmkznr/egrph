@@ -8,6 +8,20 @@ pub enum Statement {
         right: Box<Statement>,
         all: bool,
     },
+    CreateConstraint(CreateConstraintStatement),
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateConstraintStatement {
+    pub variable: String,
+    pub label: String,
+    pub property: String,
+    pub constraint_type: ConstraintType,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConstraintType {
+    Unique,
 }
 
 #[derive(Debug, Clone)]

@@ -7,6 +7,7 @@ pub enum CypherError {
     SemanticError(String),
     RuntimeError(String),
     NotImplemented(String),
+    ConstraintError(String),
 }
 
 impl fmt::Display for CypherError {
@@ -17,6 +18,7 @@ impl fmt::Display for CypherError {
             CypherError::SemanticError(msg) => write!(f, "Semantic error: {}", msg),
             CypherError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
             CypherError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
+            CypherError::ConstraintError(msg) => write!(f, "Constraint error: {}", msg),
         }
     }
 }

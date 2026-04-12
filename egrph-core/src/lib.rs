@@ -1950,6 +1950,43 @@ mod tests {
         assert_eq!(result.rows[0].values[0], CypherValue::List(vec![]));
     }
 
+    #[test]
+    fn test_create_unique_constraint() {
+        let mut g = Graph::new();
+        // 制約作成は成功する
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.gnId IS UNIQUE")
+            .unwrap();
+        // 1件目は成功
+        g.execute("CREATE (n:User {gnId: 'abc'})").unwrap();
+        // 同じ値は制約違反でエラー
+        assert!(g.execute("CREATE (n:User {gnId: 'abc'})").is_err());
+        // 別の値は成功
+        g.execute("CREATE (n:User {gnId: 'xyz'})").unwrap();
+    }
+
+    #[test]
+    fn test_create_unique_constraint_existing_violation() {
+        let mut g = Graph::new();
+        // 重複データを先に作成
+        g.execute("CREATE (n:User {gnId: 'dup'})").unwrap();
+        g.execute("CREATE (n:User {gnId: 'dup'})").unwrap();
+        // 制約追加は既存データの違反でエラー
+        assert!(
+            g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.gnId IS UNIQUE")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_create_unique_constraint_no_conflict_other_label() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.gnId IS UNIQUE")
+            .unwrap();
+        // 別ラベルは制約対象外なので同じ値でも成功
+        g.execute("CREATE (n:User {gnId: 'abc'})").unwrap();
+        g.execute("CREATE (n:Admin {gnId: 'abc'})").unwrap();
+    }
+
     #[cfg(feature = "sled-storage")]
     mod sled_tests {
         use super::*;

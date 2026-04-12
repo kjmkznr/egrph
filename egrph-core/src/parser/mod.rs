@@ -20,6 +20,9 @@ pub fn parse(input: &str) -> Result<Statement, CypherError> {
 
             for inner in pair.into_inner() {
                 match inner.as_rule() {
+                    Rule::create_constraint_stmt => {
+                        return parse_create_constraint_stmt(inner);
+                    }
                     Rule::query => queries.push(parse_query(inner)?),
                     Rule::union_op => {
                         let is_all = inner.into_inner().any(|t| t.as_rule() == Rule::all_kw);
@@ -106,6 +109,46 @@ fn parse_clause(
         _ => {}
     }
     Ok(())
+}
+
+fn parse_create_constraint_stmt(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Statement, CypherError> {
+    // Grammar: CREATE CONSTRAINT FOR "(" variable labels ")" REQUIRE variable "." IDENTIFIER IS UNIQUE
+    let mut inners = pair.into_inner();
+
+    // First variable (pattern variable, e.g. "n")
+    let var_pair = inners
+        .next()
+        .ok_or_else(|| CypherError::ParseError("Expected variable in constraint".to_string()))?;
+    let variable = var_pair.as_str().to_string();
+
+    // labels (e.g. ":User") — first IDENTIFIER inside labels rule
+    let labels_pair = inners
+        .next()
+        .ok_or_else(|| CypherError::ParseError("Expected label in constraint".to_string()))?;
+    let label = labels_pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| CypherError::ParseError("Expected label identifier".to_string()))?
+        .as_str()
+        .to_string();
+
+    // Second variable after REQUIRE (ignored, same as first)
+    inners.next(); // skip REQUIRE variable
+
+    // property name (IDENTIFIER after ".")
+    let prop_pair = inners
+        .next()
+        .ok_or_else(|| CypherError::ParseError("Expected property in constraint".to_string()))?;
+    let property = prop_pair.as_str().to_string();
+
+    Ok(Statement::CreateConstraint(CreateConstraintStatement {
+        variable,
+        label,
+        property,
+        constraint_type: ConstraintType::Unique,
+    }))
 }
 
 fn parse_create_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, CypherError> {

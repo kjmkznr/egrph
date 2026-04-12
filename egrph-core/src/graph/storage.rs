@@ -12,6 +12,8 @@ pub struct MemoryStorage {
     label_index: HashMap<String, HashSet<NodeId>>,
     next_node_id: NodeId,
     next_edge_id: EdgeId,
+    /// Unique constraints: label -> set of property names.
+    unique_constraints: HashMap<String, HashSet<String>>,
 }
 
 /// Backward-compatible alias used within this crate.
@@ -29,6 +31,7 @@ impl StorageBackend for MemoryStorage {
         labels: Vec<String>,
         properties: HashMap<String, PropertyValue>,
     ) -> NodeId {
+        // Unique constraint check is done via check_unique_constraint before calling this.
         let id = self.next_node_id;
         let node = Node {
             id,
@@ -332,6 +335,67 @@ impl StorageBackend for MemoryStorage {
 
         self.nodes.remove(&id);
         Ok(())
+    }
+
+    fn add_unique_constraint(&mut self, label: &str, property: &str) -> Result<(), String> {
+        // Check existing nodes for violations.
+        if let Some(node_ids) = self.label_index.get(label) {
+            let mut seen: HashMap<String, NodeId> = HashMap::new();
+            for &nid in node_ids {
+                if let Some(node) = self.nodes.get(&nid)
+                    && let Some(val) = node.properties.get(property)
+                {
+                    let key = format!("{:?}", val);
+                    if let Some(&existing) = seen.get(&key) {
+                        return Err(format!(
+                            "Unique constraint violation: nodes {} and {} both have {}:{} = {:?}",
+                            existing, nid, label, property, val
+                        ));
+                    }
+                    seen.insert(key, nid);
+                }
+            }
+        }
+        self.unique_constraints
+            .entry(label.to_string())
+            .or_default()
+            .insert(property.to_string());
+        Ok(())
+    }
+
+    fn check_unique_constraint(
+        &self,
+        label: &str,
+        property: &str,
+        value: &PropertyValue,
+    ) -> Result<(), String> {
+        if let Some(props) = self.unique_constraints.get(label)
+            && props.contains(property)
+            && let Some(node_ids) = self.label_index.get(label)
+        {
+            for &nid in node_ids {
+                if let Some(node) = self.nodes.get(&nid)
+                    && let Some(existing_val) = node.properties.get(property)
+                    && property_values_equal(existing_val, value)
+                {
+                    return Err(format!(
+                        "Unique constraint violation on {}:{}: value {:?} already exists",
+                        label, property, value
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn list_unique_constraints(&self) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        for (label, props) in &self.unique_constraints {
+            for prop in props {
+                result.push((label.clone(), prop.clone()));
+            }
+        }
+        result
     }
 
     fn delete_edge(&mut self, id: EdgeId) -> Result<(), String> {

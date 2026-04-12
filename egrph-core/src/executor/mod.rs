@@ -461,6 +461,21 @@ fn execute_to_records<S: StorageBackend>(
             params,
         ),
 
+        LogicalPlan::CreateConstraint {
+            label,
+            property,
+            constraint_type,
+        } => {
+            match constraint_type {
+                ConstraintType::Unique => {
+                    storage
+                        .add_unique_constraint(label, property)
+                        .map_err(CypherError::ConstraintError)?;
+                }
+            }
+            Ok((Vec::new(), Vec::new()))
+        }
+
         LogicalPlan::Union { left, right, all } => {
             let (left_cols, left_records) = execute_to_records(left, storage, params)?;
             let (right_cols, right_records) = execute_to_records(right, storage, params)?;
@@ -569,6 +584,14 @@ fn execute_create_node<S: StorageBackend>(
     for mut rec in base_records {
         let labels = pattern.labels.clone();
         let properties = resolve_map_literal_to_properties(&pattern.properties, params)?;
+        // Check unique constraints before creating the node
+        for label in &labels {
+            for (prop_key, prop_val) in &properties {
+                storage
+                    .check_unique_constraint(label, prop_key, prop_val)
+                    .map_err(CypherError::ConstraintError)?;
+            }
+        }
         let id = storage.create_node(labels, properties);
         if let Some(ref v) = var {
             let node = storage

@@ -1,8 +1,15 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
 
-// Top-level statement: one or more queries joined by UNION / UNION ALL
-statement = { SOI ~ query ~ (union_op ~ query)* ~ EOI }
+// Top-level statement: DDL or one or more queries joined by UNION / UNION ALL
+statement = { SOI ~ (create_constraint_stmt | query ~ (union_op ~ query)*) ~ EOI }
+
+// --- CREATE CONSTRAINT ---
+create_constraint_stmt = {
+    ^"CREATE" ~ ^"CONSTRAINT" ~ ^"FOR" ~
+    "(" ~ variable ~ labels ~ ")" ~
+    ^"REQUIRE" ~ variable ~ "." ~ IDENTIFIER ~ ^"IS" ~ ^"UNIQUE"
+}
 union_op  = { union_kw ~ all_kw? }
 union_kw  = @{ ^"UNION" ~ !ASCII_ALPHANUMERIC }
 all_kw    = @{ ^"ALL"   ~ !ASCII_ALPHANUMERIC }
@@ -249,4 +256,5 @@ reserved_word = {
   | ^"MERGE" | ^"ON"
   | ^"REDUCE" | ^"ANY" | ^"ALL" | ^"NONE" | ^"SINGLE"
   | ^"UNION"
+  | ^"CONSTRAINT" | ^"REQUIRE" | ^"UNIQUE"
 }

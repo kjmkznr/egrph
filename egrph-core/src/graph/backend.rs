@@ -81,4 +81,22 @@ pub trait StorageBackend {
 
     fn delete_node(&mut self, id: NodeId, detach: bool) -> Result<(), String>;
     fn delete_edge(&mut self, id: EdgeId) -> Result<(), String>;
+
+    // ── Constraints ───────────────────────────────────────────────────────
+
+    /// Register a unique constraint for `property` on nodes with `label`.
+    /// Returns an error if existing data already violates the constraint.
+    fn add_unique_constraint(&mut self, label: &str, property: &str) -> Result<(), String>;
+
+    /// Check whether adding a node with `label` and `value` for `property`
+    /// would violate any registered unique constraint.
+    fn check_unique_constraint(
+        &self,
+        label: &str,
+        property: &str,
+        value: &PropertyValue,
+    ) -> Result<(), String>;
+
+    /// List all registered unique constraints as `(label, property)` pairs.
+    fn list_unique_constraints(&self) -> Vec<(String, String)>;
 }

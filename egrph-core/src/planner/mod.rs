@@ -12,6 +12,11 @@ pub fn plan(stmt: &Statement) -> Result<LogicalPlan, CypherError> {
             right: Box::new(plan(right)?),
             all: *all,
         }),
+        Statement::CreateConstraint(c) => Ok(LogicalPlan::CreateConstraint {
+            label: c.label.clone(),
+            property: c.property.clone(),
+            constraint_type: c.constraint_type.clone(),
+        }),
     }
 }
 
