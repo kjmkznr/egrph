@@ -1431,6 +1431,35 @@ mod tests {
     }
 
     #[test]
+    fn test_export_cypher_roundtrip_special_chars() {
+        let mut g1 = Graph::new();
+        // 改行・ダブルクォート・タブを含む文字列プロパティ
+        g1.execute("CREATE (:Company {note: \"## aa\\nhoo\\r\\n### hoge\\tend\", name: \"test \\\"quoted\\\" value\"})")
+            .unwrap();
+
+        let cypher = g1.export_cypher();
+
+        // エクスポートされたCypherが再度パース・実行できることを確認
+        let mut g2 = Graph::new();
+        g2.execute(&cypher).unwrap();
+
+        assert_eq!(g2.node_count(), 1);
+
+        let result = g2
+            .execute("MATCH (c:Company) RETURN c.note, c.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("## aa\nhoo\r\n### hoge\tend".to_string())
+        );
+        assert_eq!(
+            result.rows[0].values[1],
+            CypherValue::String("test \"quoted\" value".to_string())
+        );
+    }
+
+    #[test]
     fn test_export_cypher_roundtrip() {
         let mut g1 = Graph::new();
         g1.execute("CREATE (:Person {name: \"Alice\", age: 30})")
