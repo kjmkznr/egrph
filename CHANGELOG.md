@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wasm-0.2.1] - 2026-04-12
+
+### Added
+
+- `CREATE CONSTRAINT` 文によるユニーク制約のサポートを追加。
+
+### Fixed
+
+- `export_cypher()` でプロパティ値に特殊文字（バックスラッシュ、ダブルクォート等）が含まれる場合のエスケープ処理を修正。
+
 ## [0.2.0] - 2026-04-11
 
 ### Added
