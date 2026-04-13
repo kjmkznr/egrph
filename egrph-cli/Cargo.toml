@@ -1,0 +1,14 @@
+[package]
+name = "egrph-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Interactive CLI shell for egrph graph database"
+
+[[bin]]
+name = "egrph"
+path = "src/main.rs"
+
+[dependencies]
+egrph-core = { path = "../egrph-core" }
+clap = { version = "4", features = ["derive"] }
+rustyline = "14"
