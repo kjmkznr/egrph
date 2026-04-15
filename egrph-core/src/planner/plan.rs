@@ -19,8 +19,12 @@ pub enum LogicalPlan {
     },
 
     /// Scan all nodes, optionally filtering by label, binding to variable.
+    /// `inline_props` carries the node-pattern's inline property constraints
+    /// (e.g. `{gnId: "x"}`).  At execution time these are evaluated once and
+    /// used to perform an O(1) property-index lookup instead of an O(N) scan.
     ScanNodes {
         label_filter: Option<String>,
+        inline_props: Vec<(String, Expression)>,
         variable: String,
     },
 

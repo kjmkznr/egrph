@@ -14,6 +14,16 @@ pub struct MemoryStorage {
     next_edge_id: EdgeId,
     /// Unique constraints: label -> set of property names.
     unique_constraints: HashMap<String, HashSet<String>>,
+    /// Property index: prop_name -> prop_value_key -> set of NodeIds.
+    /// Enables O(1) property lookup instead of O(N) full scan.
+    property_index: HashMap<String, HashMap<String, HashSet<NodeId>>>,
+}
+
+/// Stable string key for a `PropertyValue`, used as the inner key of the
+/// property index.  `{:?}` includes the variant name so there is no collision
+/// between e.g. `Int(1)` and `String("1")`.
+fn prop_value_key(val: &PropertyValue) -> String {
+    format!("{:?}", val)
 }
 
 /// Backward-compatible alias used within this crate.
@@ -33,6 +43,14 @@ impl StorageBackend for MemoryStorage {
     ) -> NodeId {
         // Unique constraint check is done via check_unique_constraint before calling this.
         let id = self.next_node_id;
+        for (key, val) in &properties {
+            self.property_index
+                .entry(key.clone())
+                .or_default()
+                .entry(prop_value_key(val))
+                .or_default()
+                .insert(id);
+        }
         let node = Node {
             id,
             labels: labels.clone(),
@@ -139,6 +157,51 @@ impl StorageBackend for MemoryStorage {
         }
     }
 
+    fn match_nodes_with_props(
+        &self,
+        label: Option<&str>,
+        props: &HashMap<String, PropertyValue>,
+    ) -> Vec<Node> {
+        if props.is_empty() {
+            return self.match_nodes(label);
+        }
+
+        // Build the candidate set as the intersection of all per-property index
+        // results.  This is typically a single-element set for unique properties.
+        let mut candidates: Option<HashSet<NodeId>> = None;
+        for (key, val) in props {
+            let vkey = prop_value_key(val);
+            let ids: HashSet<NodeId> = self
+                .property_index
+                .get(key)
+                .and_then(|val_map| val_map.get(&vkey))
+                .cloned()
+                .unwrap_or_default();
+            candidates = Some(match candidates {
+                None => ids,
+                Some(existing) => existing.intersection(&ids).copied().collect(),
+            });
+        }
+
+        let candidates = match candidates {
+            Some(ids) => ids,
+            None => return Vec::new(),
+        };
+
+        candidates
+            .into_iter()
+            .filter_map(|id| {
+                let node = self.nodes.get(&id)?;
+                if let Some(l) = label
+                    && !node.labels.contains(&l.to_string())
+                {
+                    return None;
+                }
+                Some(node.clone())
+            })
+            .collect()
+    }
+
     fn find_node(
         &self,
         labels: &[String],
@@ -196,7 +259,23 @@ impl StorageBackend for MemoryStorage {
 
     fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
         if let Some(node) = self.nodes.get_mut(&id) {
-            node.properties.insert(key, value);
+            // Remove old index entry.
+            if let Some(old_val) = node.properties.get(&key) {
+                let old_vkey = prop_value_key(old_val);
+                if let Some(val_map) = self.property_index.get_mut(&key)
+                    && let Some(id_set) = val_map.get_mut(&old_vkey)
+                {
+                    id_set.remove(&id);
+                }
+            }
+            node.properties.insert(key.clone(), value.clone());
+            // Add new index entry.
+            self.property_index
+                .entry(key)
+                .or_default()
+                .entry(prop_value_key(&value))
+                .or_default()
+                .insert(id);
         }
     }
 
@@ -208,6 +287,24 @@ impl StorageBackend for MemoryStorage {
 
     fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
         if let Some(node) = self.nodes.get_mut(&id) {
+            // Remove old index entries.
+            for (key, val) in &node.properties {
+                let old_vkey = prop_value_key(val);
+                if let Some(val_map) = self.property_index.get_mut(key)
+                    && let Some(id_set) = val_map.get_mut(&old_vkey)
+                {
+                    id_set.remove(&id);
+                }
+            }
+            // Add new index entries.
+            for (key, val) in &properties {
+                self.property_index
+                    .entry(key.clone())
+                    .or_default()
+                    .entry(prop_value_key(val))
+                    .or_default()
+                    .insert(id);
+            }
             node.properties = properties;
         }
     }
@@ -221,6 +318,22 @@ impl StorageBackend for MemoryStorage {
     fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
         if let Some(node) = self.nodes.get_mut(&id) {
             for (k, v) in properties {
+                // Remove old index entry for this key if it exists.
+                if let Some(old_val) = node.properties.get(&k) {
+                    let old_vkey = prop_value_key(old_val);
+                    if let Some(val_map) = self.property_index.get_mut(&k)
+                        && let Some(id_set) = val_map.get_mut(&old_vkey)
+                    {
+                        id_set.remove(&id);
+                    }
+                }
+                // Add new index entry.
+                self.property_index
+                    .entry(k.clone())
+                    .or_default()
+                    .entry(prop_value_key(&v))
+                    .or_default()
+                    .insert(id);
                 node.properties.insert(k, v);
             }
         }
@@ -249,8 +362,15 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn remove_node_property(&mut self, id: NodeId, key: &str) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.properties.remove(key);
+        if let Some(node) = self.nodes.get_mut(&id)
+            && let Some(val) = node.properties.remove(key)
+        {
+            let vkey = prop_value_key(&val);
+            if let Some(val_map) = self.property_index.get_mut(key)
+                && let Some(id_set) = val_map.get_mut(&vkey)
+            {
+                id_set.remove(&id);
+            }
         }
     }
 
@@ -322,14 +442,19 @@ impl StorageBackend for MemoryStorage {
         self.outgoing.remove(&id);
         self.incoming.remove(&id);
 
-        let labels: Vec<String> = self
-            .nodes
-            .get(&id)
-            .map(|n| n.labels.clone())
-            .unwrap_or_default();
-        for label in &labels {
-            if let Some(set) = self.label_index.get_mut(label) {
-                set.remove(&id);
+        if let Some(node) = self.nodes.get(&id) {
+            for label in &node.labels {
+                if let Some(set) = self.label_index.get_mut(label) {
+                    set.remove(&id);
+                }
+            }
+            for (key, val) in &node.properties {
+                let vkey = prop_value_key(val);
+                if let Some(val_map) = self.property_index.get_mut(key)
+                    && let Some(id_set) = val_map.get_mut(&vkey)
+                {
+                    id_set.remove(&id);
+                }
             }
         }
 

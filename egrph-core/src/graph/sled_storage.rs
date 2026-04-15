@@ -35,6 +35,10 @@ pub struct SledStorage {
     outgoing: sled::Tree,
     incoming: sled::Tree,
     meta: sled::Tree,
+    /// Property index: `{prop_name}\x00{type_byte}{value_bytes}{node_id_be}` → empty.
+    prop_idx: sled::Tree,
+    /// Unique constraints: `{label}\x00{property}` → empty.
+    constraints: sled::Tree,
 }
 
 // ── Key helpers ──────────────────────────────────────────────────────────────
@@ -54,6 +58,53 @@ fn label_prefix(label: &str) -> Vec<u8> {
     let mut p = label.as_bytes().to_vec();
     p.push(0x00);
     p
+}
+
+fn prop_idx_value_bytes(val: &PropertyValue) -> Vec<u8> {
+    // Format: type_byte + fixed-length or length-prefixed value bytes.
+    // Using a length prefix for strings ensures no ambiguity when the key is
+    // used as a scan prefix (prefix = prop_name + \x00 + value_bytes, the last
+    // 8 bytes of the full key are always the node_id).
+    match val {
+        PropertyValue::String(s) => {
+            let bytes = s.as_bytes();
+            let mut v = vec![b's'];
+            v.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            v.extend_from_slice(bytes);
+            v
+        }
+        PropertyValue::Int(i) => {
+            let mut v = vec![b'i'];
+            v.extend_from_slice(&i.to_be_bytes());
+            v
+        }
+        PropertyValue::Float(f) => {
+            let mut v = vec![b'f'];
+            v.extend_from_slice(&f.to_bits().to_be_bytes());
+            v
+        }
+        PropertyValue::Bool(b) => vec![b'b', *b as u8],
+    }
+}
+
+fn prop_idx_prefix(prop_name: &str, val: &PropertyValue) -> Vec<u8> {
+    let mut key = prop_name.as_bytes().to_vec();
+    key.push(0x00);
+    key.extend_from_slice(&prop_idx_value_bytes(val));
+    key
+}
+
+fn prop_idx_key(prop_name: &str, val: &PropertyValue, node_id: NodeId) -> Vec<u8> {
+    let mut key = prop_idx_prefix(prop_name, val);
+    key.extend_from_slice(&node_id.to_be_bytes());
+    key
+}
+
+fn constraint_key(label: &str, property: &str) -> Vec<u8> {
+    let mut key = label.as_bytes().to_vec();
+    key.push(0x00);
+    key.extend_from_slice(property.as_bytes());
+    key
 }
 
 // ── Codec helpers ─────────────────────────────────────────────────────────────
@@ -86,6 +137,8 @@ impl SledStorage {
         let outgoing = db.open_tree("outgoing")?;
         let incoming = db.open_tree("incoming")?;
         let meta = db.open_tree("meta")?;
+        let prop_idx = db.open_tree("prop_idx")?;
+        let constraints = db.open_tree("constraints")?;
         Ok(Self {
             _db: db,
             nodes,
@@ -94,6 +147,8 @@ impl SledStorage {
             outgoing,
             incoming,
             meta,
+            prop_idx,
+            constraints,
         })
     }
 
@@ -171,6 +226,11 @@ impl StorageBackend for SledStorage {
         properties: HashMap<String, PropertyValue>,
     ) -> NodeId {
         let id = self.next_node_id();
+        for (key, val) in &properties {
+            self.prop_idx
+                .insert(prop_idx_key(key, val, id), b"")
+                .expect("prop idx insert");
+        }
         let node = Node {
             id,
             labels: labels.clone(),
@@ -359,6 +419,12 @@ impl StorageBackend for SledStorage {
 
     fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
         if let Some(mut node) = self.get_node(id) {
+            if let Some(old_val) = node.properties.get(&key) {
+                self.prop_idx.remove(prop_idx_key(&key, old_val, id)).ok();
+            }
+            self.prop_idx
+                .insert(prop_idx_key(&key, &value, id), b"")
+                .ok();
             node.properties.insert(key, value);
             self.nodes.insert(u64_key(id), encode(&node)).ok();
         }
@@ -373,6 +439,14 @@ impl StorageBackend for SledStorage {
 
     fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
         if let Some(mut node) = self.get_node(id) {
+            for (key, val) in &node.properties {
+                self.prop_idx.remove(prop_idx_key(key, val, id)).ok();
+            }
+            for (key, val) in &properties {
+                self.prop_idx
+                    .insert(prop_idx_key(key, val, id), b"")
+                    .ok();
+            }
             node.properties = properties;
             self.nodes.insert(u64_key(id), encode(&node)).ok();
         }
@@ -388,6 +462,12 @@ impl StorageBackend for SledStorage {
     fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
         if let Some(mut node) = self.get_node(id) {
             for (k, v) in properties {
+                if let Some(old_val) = node.properties.get(&k) {
+                    self.prop_idx.remove(prop_idx_key(&k, old_val, id)).ok();
+                }
+                self.prop_idx
+                    .insert(prop_idx_key(&k, &v, id), b"")
+                    .ok();
                 node.properties.insert(k, v);
             }
             self.nodes.insert(u64_key(id), encode(&node)).ok();
@@ -419,7 +499,9 @@ impl StorageBackend for SledStorage {
 
     fn remove_node_property(&mut self, id: NodeId, key: &str) {
         if let Some(mut node) = self.get_node(id) {
-            node.properties.remove(key);
+            if let Some(val) = node.properties.remove(key) {
+                self.prop_idx.remove(prop_idx_key(key, &val, id)).ok();
+            }
             self.nodes.insert(u64_key(id), encode(&node)).ok();
         }
     }
@@ -484,6 +566,9 @@ impl StorageBackend for SledStorage {
             for label in &node.labels {
                 self.label_idx.remove(label_key(label, id)).ok();
             }
+            for (key, val) in &node.properties {
+                self.prop_idx.remove(prop_idx_key(key, val, id)).ok();
+            }
         }
 
         self.nodes.remove(u64_key(id)).ok();
@@ -499,6 +584,143 @@ impl StorageBackend for SledStorage {
         } else {
             Err(format!("Edge {} not found", id))
         }
+    }
+
+    fn match_nodes_with_props(
+        &self,
+        label: Option<&str>,
+        props: &HashMap<String, PropertyValue>,
+    ) -> Vec<Node> {
+        if props.is_empty() {
+            return self.match_nodes(label);
+        }
+
+        // Use the first property to get an initial candidate set via the index,
+        // then intersect with remaining properties.
+        let mut candidate_ids: Option<std::collections::HashSet<NodeId>> = None;
+        for (key, val) in props {
+            let prefix = prop_idx_prefix(key, val);
+            let ids: std::collections::HashSet<NodeId> = self
+                .prop_idx
+                .scan_prefix(&prefix)
+                .filter_map(|r| r.ok())
+                .filter_map(|(k, _)| {
+                    let id_bytes = k.get(k.len().saturating_sub(8)..)?;
+                    if id_bytes.len() != 8 {
+                        return None;
+                    }
+                    Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+                })
+                .collect();
+            candidate_ids = Some(match candidate_ids {
+                None => ids,
+                Some(existing) => existing.intersection(&ids).copied().collect(),
+            });
+        }
+
+        let candidate_ids = match candidate_ids {
+            Some(ids) => ids,
+            None => return Vec::new(),
+        };
+
+        candidate_ids
+            .into_iter()
+            .filter_map(|id| {
+                let node = self.get_node(id)?;
+                if let Some(l) = label
+                    && !node.labels.contains(&l.to_string())
+                {
+                    return None;
+                }
+                Some(node)
+            })
+            .collect()
+    }
+
+    fn add_unique_constraint(&mut self, label: &str, property: &str) -> Result<(), String> {
+        // Check existing nodes for violations.
+        if let Some(node_ids) = {
+            let prefix = label_prefix(label);
+            let ids: Vec<NodeId> = self
+                .label_idx
+                .scan_prefix(&prefix)
+                .filter_map(|r| r.ok())
+                .filter_map(|(k, _)| {
+                    let id_bytes = k.get(prefix.len()..)?;
+                    if id_bytes.len() != 8 {
+                        return None;
+                    }
+                    Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+                })
+                .collect();
+            if ids.is_empty() { None } else { Some(ids) }
+        } {
+            let mut seen: HashMap<String, NodeId> = HashMap::new();
+            for nid in node_ids {
+                if let Some(node) = self.get_node(nid)
+                    && let Some(val) = node.properties.get(property)
+                {
+                    let key = format!("{:?}", val);
+                    if let Some(&existing) = seen.get(&key) {
+                        return Err(format!(
+                            "Unique constraint violation: nodes {} and {} both have {}:{} = {:?}",
+                            existing, nid, label, property, val
+                        ));
+                    }
+                    seen.insert(key, nid);
+                }
+            }
+        }
+        self.constraints
+            .insert(constraint_key(label, property), b"")
+            .expect("constraint insert");
+        Ok(())
+    }
+
+    fn check_unique_constraint(
+        &self,
+        label: &str,
+        property: &str,
+        value: &PropertyValue,
+    ) -> Result<(), String> {
+        if self
+            .constraints
+            .contains_key(constraint_key(label, property))
+            .unwrap_or(false)
+        {
+            // Find nodes that have this property value.
+            let prefix = prop_idx_prefix(property, value);
+            for (k, _) in self.prop_idx.scan_prefix(&prefix).flatten() {
+                if let Some(id_bytes) = k.get(k.len().saturating_sub(8)..)
+                    && id_bytes.len() == 8
+                {
+                    let nid = u64::from_be_bytes(id_bytes.try_into().unwrap());
+                    if let Some(node) = self.get_node(nid)
+                        && node.labels.contains(&label.to_string())
+                    {
+                        return Err(format!(
+                            "Unique constraint violation on {}:{}: value {:?} already exists",
+                            label, property, value
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn list_unique_constraints(&self) -> Vec<(String, String)> {
+        self.constraints
+            .iter()
+            .filter_map(|r| r.ok())
+            .filter_map(|(k, _)| {
+                let s = std::str::from_utf8(&k).ok()?;
+                let mut parts = s.splitn(2, '\x00');
+                let label = parts.next()?.to_string();
+                let property = parts.next()?.to_string();
+                Some((label, property))
+            })
+            .collect()
     }
 }
 
