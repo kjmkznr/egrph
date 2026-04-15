@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wasm-0.3.0] - 2026-04-15
+
+### Added
+
+- `UNWIND` 句と `CREATE` 句を組み合わせたクエリで、プロパティマップに複雑な式（変数参照・演算など）を使用できるようにサポート。
+
+### Changed
+
+- ノードのプロパティ値によるルックアップをプロパティインデックスにより O(1) に改善。
+
 ## [wasm-0.2.1] - 2026-04-12
 
 ### Added
