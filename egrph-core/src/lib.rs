@@ -885,6 +885,44 @@ mod tests {
     }
 
     #[test]
+    fn test_unwind_create_with_expressions() {
+        let mut g = Graph::new();
+        g.execute(
+            "UNWIND range(1, 5) AS i
+             CREATE (:Person {
+               gnId: 'node-' + toString(i),
+               name: 'Person ' + toString(i),
+               age:  (i % 80) + 20,
+               group: i % 3
+             })",
+        )
+        .unwrap();
+
+        let result = g
+            .execute("MATCH (p:Person) RETURN p.gnId, p.name, p.age, p.group ORDER BY p.gnId")
+            .unwrap();
+        assert_eq!(result.rows.len(), 5);
+
+        // First row: i=1
+        match &result.rows[0].values[0] {
+            CypherValue::String(s) => assert_eq!(s, "node-1"),
+            other => panic!("Expected String, got {:?}", other),
+        }
+        match &result.rows[0].values[1] {
+            CypherValue::String(s) => assert_eq!(s, "Person 1"),
+            other => panic!("Expected String, got {:?}", other),
+        }
+        match &result.rows[0].values[2] {
+            CypherValue::Integer(i) => assert_eq!(*i, 21), // (1 % 80) + 20
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+        match &result.rows[0].values[3] {
+            CypherValue::Integer(i) => assert_eq!(*i, 1), // 1 % 3
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_set_property() {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
