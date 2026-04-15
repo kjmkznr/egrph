@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "egrph-c-abi"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "egrph-core",
  "serde_json",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "egrph-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bincode",
  "pest",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "egrph-python"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "egrph-core",
  "pyo3",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "egrph-wasm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
  "egrph-core",
