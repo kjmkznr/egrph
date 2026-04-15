@@ -41,15 +41,59 @@ fn execute_to_records<S: StorageBackend>(
     match plan {
         LogicalPlan::EmptyRow => Ok((Vec::new(), vec![Record::new()])),
 
-        LogicalPlan::CreateNode { input, pattern } => {
-            execute_create_node(input, pattern, storage, params)
-        }
+        LogicalPlan::CreateNode { .. } | LogicalPlan::CreatePath { .. } => {
+            // Collect the chain of CreateNode/CreatePath nodes iteratively to avoid
+            // deep recursion when a single CREATE clause has many patterns
+            // (e.g. 1000 patterns produce a 1000-level deep input chain).
+            enum CreateOp<'a> {
+                Node(&'a NodePattern),
+                Path(&'a NodePattern, &'a [PatternChainElement]),
+            }
+            let mut ops: Vec<CreateOp<'_>> = Vec::new();
+            let mut current = plan;
+            loop {
+                match current {
+                    LogicalPlan::CreateNode { input, pattern } => {
+                        ops.push(CreateOp::Node(pattern));
+                        current = input.as_ref();
+                    }
+                    LogicalPlan::CreatePath {
+                        input,
+                        start,
+                        elements,
+                    } => {
+                        ops.push(CreateOp::Path(start, elements));
+                        current = input.as_ref();
+                    }
+                    _ => break,
+                }
+            }
+            ops.reverse(); // process in original order
 
-        LogicalPlan::CreatePath {
-            input,
-            start,
-            elements,
-        } => execute_create_path(input, start, elements, storage, params),
+            // Execute the base (non-Create) input first
+            let (mut cols, mut records) = execute_to_records(current, storage, params)?;
+
+            // Apply each create operation in order
+            for op in &ops {
+                match op {
+                    CreateOp::Node(pattern) => {
+                        let (new_cols, new_records) = execute_create_node_from_records(
+                            cols, records, pattern, storage, params,
+                        )?;
+                        cols = new_cols;
+                        records = new_records;
+                    }
+                    CreateOp::Path(start, elements) => {
+                        let (new_cols, new_records) = execute_create_path_from_records(
+                            cols, records, start, elements, storage, params,
+                        )?;
+                        cols = new_cols;
+                        records = new_records;
+                    }
+                }
+            }
+            Ok((cols, records))
+        }
 
         LogicalPlan::ScanNodes {
             label_filter,
@@ -610,14 +654,13 @@ fn sync_edge_in_record<S: StorageBackend>(
 
 // --- Concrete executors ---
 
-fn execute_create_node<S: StorageBackend>(
-    input: &LogicalPlan,
+fn execute_create_node_from_records<S: StorageBackend>(
+    mut cols: Vec<String>,
+    input_records: Vec<Record>,
     pattern: &NodePattern,
     storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
-
     // Bind the created node variable if provided
     let var = pattern.variable.clone();
     if let Some(ref v) = var
@@ -661,15 +704,14 @@ fn execute_create_node<S: StorageBackend>(
     Ok((cols, result))
 }
 
-fn execute_create_path<S: StorageBackend>(
-    input: &LogicalPlan,
+fn execute_create_path_from_records<S: StorageBackend>(
+    mut cols: Vec<String>,
+    input_records: Vec<Record>,
     start: &NodePattern,
     elements: &[PatternChainElement],
     storage: &mut S,
     params: &Parameters,
 ) -> Result<(Vec<String>, Vec<Record>), CypherError> {
-    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
-
     // Collect all variable names we will bind
     let start_var = start.variable.clone();
     if let Some(ref v) = start_var

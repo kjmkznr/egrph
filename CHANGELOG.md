@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- 1000 件以上の CREATE パターンを含むクエリ（例: `CREATE (a0)-[:R]->(b0), (a1)-[:R]->(b1), ...` を 1000 個）で発生していた `RuntimeError: memory access out of bounds` を修正。プランナーが生成する 1000 段の `CreatePath`/`CreateNode` チェーンをエグゼキューターで再帰的に処理していたため、WASM 環境でスタックオーバーフローが発生していた。`CreatePath`/`CreateNode` チェーンを反復処理に変換することで修正。
+
 ## [wasm-0.3.1] - 2026-04-15
 
 ### Fixed

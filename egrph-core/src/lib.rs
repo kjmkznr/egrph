@@ -2064,8 +2064,8 @@ mod tests {
         }
         assert_eq!(g.node_count(), node_count);
 
-        // Build a query with 50 MATCH pairs and one CREATE
-        let batch_size = 50usize;
+        // Build a query with 1000 MATCH pairs and one CREATE (regression for 1000-pair case)
+        let batch_size = 1000usize;
         let mut match_lines = Vec::new();
         let mut create_parts = Vec::new();
         for i in 1..=batch_size {
