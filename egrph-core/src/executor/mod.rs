@@ -583,7 +583,7 @@ fn execute_create_node<S: StorageBackend>(
     let mut result = Vec::with_capacity(base_records.len());
     for mut rec in base_records {
         let labels = pattern.labels.clone();
-        let properties = resolve_map_literal_to_properties(&pattern.properties, params)?;
+        let properties = resolve_map_literal_to_properties(&pattern.properties, &rec, params, storage)?;
         // Check unique constraints before creating the node
         for label in &labels {
             for (prop_key, prop_val) in &properties {
@@ -652,7 +652,7 @@ fn execute_create_path<S: StorageBackend>(
                 n.id
             } else {
                 let labels = start.labels.clone();
-                let props = resolve_map_literal_to_properties(&start.properties, params)?;
+                let props = resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
                 let id = storage.create_node(labels, props);
                 let node = storage
                     .get_node(id)
@@ -665,7 +665,7 @@ fn execute_create_path<S: StorageBackend>(
             }
         } else {
             let labels = start.labels.clone();
-            let props = resolve_map_literal_to_properties(&start.properties, params)?;
+            let props = resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
             storage.create_node(labels, props)
         };
 
@@ -677,7 +677,7 @@ fn execute_create_path<S: StorageBackend>(
                     n.id
                 } else {
                     let labels = elem.node.labels.clone();
-                    let props = resolve_map_literal_to_properties(&elem.node.properties, params)?;
+                    let props = resolve_map_literal_to_properties(&elem.node.properties, &rec, params, storage)?;
                     let id = storage.create_node(labels, props);
                     let node = storage
                         .get_node(id)
@@ -690,7 +690,7 @@ fn execute_create_path<S: StorageBackend>(
                 }
             } else {
                 let labels = elem.node.labels.clone();
-                let props = resolve_map_literal_to_properties(&elem.node.properties, params)?;
+                let props = resolve_map_literal_to_properties(&elem.node.properties, &rec, params, storage)?;
                 storage.create_node(labels, props)
             };
 
@@ -701,7 +701,7 @@ fn execute_create_path<S: StorageBackend>(
                 .cloned()
                 .unwrap_or_default();
             let edge_props =
-                resolve_map_literal_to_properties(&elem.relationship.properties, params)?;
+                resolve_map_literal_to_properties(&elem.relationship.properties, &rec, params, storage)?;
 
             let (src, dst) = match elem.relationship.direction {
                 Direction::Incoming => (dst_id, prev_id),
@@ -1069,7 +1069,8 @@ fn execute_merge<S: StorageBackend>(
             }
 
             let labels = np.labels.clone();
-            let properties = resolve_map_literal_to_properties(&np.properties, params)?;
+            let empty_rec = Record::new();
+            let properties = resolve_map_literal_to_properties(&np.properties, &empty_rec, params, storage)?;
 
             // Find all existing nodes matching labels and properties.
             // MERGE runs ON MATCH for every matching node (not just the first),
@@ -1346,60 +1347,19 @@ fn expr_to_column_name(expr: &Expression) -> String {
     }
 }
 
-fn resolve_map_literal_to_properties(
+fn resolve_map_literal_to_properties<S: StorageBackend>(
     map_lit: &Option<MapLiteral>,
+    record: &Record,
     params: &Parameters,
+    storage: &S,
 ) -> Result<HashMap<String, PropertyValue>, CypherError> {
     let mut properties = HashMap::new();
     if let Some(map) = map_lit {
         for (key, expr) in &map.entries {
-            let value = expr_to_property_value(expr, params)?;
-            properties.insert(key.clone(), value);
+            let val = eval_with_params(expr, record, params, storage)?;
+            let prop = cypher_value_to_property(&val)?;
+            properties.insert(key.clone(), prop);
         }
     }
     Ok(properties)
-}
-
-fn expr_to_property_value(
-    expr: &Expression,
-    params: &Parameters,
-) -> Result<PropertyValue, CypherError> {
-    match expr {
-        Expression::Literal(Literal::String(s)) => Ok(PropertyValue::String(s.clone())),
-        Expression::Literal(Literal::Integer(i)) => Ok(PropertyValue::Int(*i)),
-        Expression::Literal(Literal::Float(f)) => Ok(PropertyValue::Float(*f)),
-        Expression::Literal(Literal::Boolean(b)) => Ok(PropertyValue::Bool(*b)),
-        Expression::Literal(Literal::Null) => Err(CypherError::TypeError(
-            "Property value cannot be null".to_string(),
-        )),
-        // Handle negative literals: -(integer) or -(float)
-        Expression::UnaryOp {
-            op: UnaryOp::Neg,
-            operand,
-        } => match operand.as_ref() {
-            Expression::Literal(Literal::Integer(i)) => Ok(PropertyValue::Int(-i)),
-            Expression::Literal(Literal::Float(f)) => Ok(PropertyValue::Float(-f)),
-            _ => Err(CypherError::NotImplemented(
-                "Complex expressions in property values".to_string(),
-            )),
-        },
-        // Support $param references in inline property maps
-        Expression::Parameter(name) => match params.get(name) {
-            Some(CypherValue::String(s)) => Ok(PropertyValue::String(s.clone())),
-            Some(CypherValue::Integer(i)) => Ok(PropertyValue::Int(*i)),
-            Some(CypherValue::Float(f)) => Ok(PropertyValue::Float(*f)),
-            Some(CypherValue::Boolean(b)) => Ok(PropertyValue::Bool(*b)),
-            Some(_) => Err(CypherError::TypeError(format!(
-                "Parameter ${} must be a scalar value (String, Integer, Float, or Boolean)",
-                name
-            ))),
-            None => Err(CypherError::RuntimeError(format!(
-                "Parameter ${} is not defined",
-                name
-            ))),
-        },
-        _ => Err(CypherError::NotImplemented(
-            "Complex expressions in property values".to_string(),
-        )),
-    }
 }
