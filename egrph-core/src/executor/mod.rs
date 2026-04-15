@@ -403,8 +403,8 @@ fn execute_to_records<S: StorageBackend>(
                 }
 
                 // For each accumulated row, combine with each right row.
-                let merged_cap =
-                    acc_records.first().map(|r| r.len()).unwrap_or(0) + right_records.first().map(|r| r.len()).unwrap_or(0);
+                let merged_cap = acc_records.first().map(|r| r.len()).unwrap_or(0)
+                    + right_records.first().map(|r| r.len()).unwrap_or(0);
                 let mut next_acc =
                     Vec::with_capacity(acc_records.len() * right_records.len().max(1));
                 for left_rec in &acc_records {
