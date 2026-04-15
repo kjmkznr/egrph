@@ -28,6 +28,24 @@ pub trait StorageBackend {
     /// Return all nodes optionally filtered by label.
     fn match_nodes(&self, label: Option<&str>) -> Vec<Node>;
 
+    /// Return all nodes matching `label` (if given) and ALL of `props`.
+    /// Implementations should override this to use a property index for O(1)
+    /// lookup.  The default falls back to a full scan + filter.
+    fn match_nodes_with_props(
+        &self,
+        label: Option<&str>,
+        props: &HashMap<String, PropertyValue>,
+    ) -> Vec<Node> {
+        self.match_nodes(label)
+            .into_iter()
+            .filter(|node| {
+                props.iter().all(|(key, val)| {
+                    node.properties.get(key).map(|v| v == val).unwrap_or(false)
+                })
+            })
+            .collect()
+    }
+
     /// Return the first node ID that matches `labels` and `properties`.
     fn find_node(
         &self,

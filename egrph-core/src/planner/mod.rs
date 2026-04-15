@@ -126,6 +126,7 @@ fn plan_match_scan(
 
             let mut current = LogicalPlan::ScanNodes {
                 label_filter,
+                inline_props: inline_props_from_pattern(&node_pattern.properties),
                 variable: variable.clone(),
             };
 
@@ -160,6 +161,7 @@ fn plan_match_scan(
 
             let mut current = LogicalPlan::ScanNodes {
                 label_filter: start_label,
+                inline_props: inline_props_from_pattern(&start.properties),
                 variable: start_var.clone(),
             };
 
@@ -254,7 +256,16 @@ fn plan_match_scan(
     }
 }
 
-/// Add Filter nodes for inline property constraints (e.g. `{name: "Alice"}`).
+/// Extract inline property entries from a node pattern (e.g. `{gnId: "x"}`)
+// so they can be embedded directly in a `ScanNodes` plan node for index lookup.
+fn inline_props_from_pattern(properties: &Option<MapLiteral>) -> Vec<(String, Expression)> {
+    match properties {
+        Some(map) => map.entries.clone(),
+        None => Vec::new(),
+    }
+}
+
+// Add Filter nodes for inline property constraints (e.g. `{name: "Alice"}`).
 fn add_property_filters(
     input: LogicalPlan,
     variable: &str,

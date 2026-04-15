@@ -53,9 +53,45 @@ fn execute_to_records<S: StorageBackend>(
 
         LogicalPlan::ScanNodes {
             label_filter,
+            inline_props,
             variable,
         } => {
-            let nodes = storage.match_nodes(label_filter.as_deref());
+            let nodes = if inline_props.is_empty() {
+                storage.match_nodes(label_filter.as_deref())
+            } else {
+                // Evaluate inline property expressions against an empty record.
+                // Inline node-pattern properties are always literals, so this
+                // succeeds immediately without graph access.
+                let empty_rec = Record::new();
+                let mut props_map: HashMap<String, PropertyValue> =
+                    HashMap::with_capacity(inline_props.len());
+                let mut use_index = true;
+                for (key, expr) in inline_props {
+                    match eval_with_params(expr, &empty_rec, params, storage) {
+                        Ok(CypherValue::String(s)) => {
+                            props_map.insert(key.clone(), PropertyValue::String(s));
+                        }
+                        Ok(CypherValue::Integer(i)) => {
+                            props_map.insert(key.clone(), PropertyValue::Int(i));
+                        }
+                        Ok(CypherValue::Float(f)) => {
+                            props_map.insert(key.clone(), PropertyValue::Float(f));
+                        }
+                        Ok(CypherValue::Boolean(b)) => {
+                            props_map.insert(key.clone(), PropertyValue::Bool(b));
+                        }
+                        _ => {
+                            use_index = false;
+                            break;
+                        }
+                    }
+                }
+                if use_index {
+                    storage.match_nodes_with_props(label_filter.as_deref(), &props_map)
+                } else {
+                    storage.match_nodes(label_filter.as_deref())
+                }
+            };
             let records: Vec<Record> = nodes
                 .into_iter()
                 .map(|node| {
