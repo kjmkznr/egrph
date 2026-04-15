@@ -39,9 +39,9 @@ pub trait StorageBackend {
         self.match_nodes(label)
             .into_iter()
             .filter(|node| {
-                props.iter().all(|(key, val)| {
-                    node.properties.get(key).map(|v| v == val).unwrap_or(false)
-                })
+                props
+                    .iter()
+                    .all(|(key, val)| node.properties.get(key).map(|v| v == val).unwrap_or(false))
             })
             .collect()
     }

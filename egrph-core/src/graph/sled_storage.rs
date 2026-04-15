@@ -443,9 +443,7 @@ impl StorageBackend for SledStorage {
                 self.prop_idx.remove(prop_idx_key(key, val, id)).ok();
             }
             for (key, val) in &properties {
-                self.prop_idx
-                    .insert(prop_idx_key(key, val, id), b"")
-                    .ok();
+                self.prop_idx.insert(prop_idx_key(key, val, id), b"").ok();
             }
             node.properties = properties;
             self.nodes.insert(u64_key(id), encode(&node)).ok();
@@ -465,9 +463,7 @@ impl StorageBackend for SledStorage {
                 if let Some(old_val) = node.properties.get(&k) {
                     self.prop_idx.remove(prop_idx_key(&k, old_val, id)).ok();
                 }
-                self.prop_idx
-                    .insert(prop_idx_key(&k, &v, id), b"")
-                    .ok();
+                self.prop_idx.insert(prop_idx_key(&k, &v, id), b"").ok();
                 node.properties.insert(k, v);
             }
             self.nodes.insert(u64_key(id), encode(&node)).ok();

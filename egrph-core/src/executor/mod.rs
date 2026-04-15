@@ -619,7 +619,8 @@ fn execute_create_node<S: StorageBackend>(
     let mut result = Vec::with_capacity(base_records.len());
     for mut rec in base_records {
         let labels = pattern.labels.clone();
-        let properties = resolve_map_literal_to_properties(&pattern.properties, &rec, params, storage)?;
+        let properties =
+            resolve_map_literal_to_properties(&pattern.properties, &rec, params, storage)?;
         // Check unique constraints before creating the node
         for label in &labels {
             for (prop_key, prop_val) in &properties {
@@ -688,7 +689,8 @@ fn execute_create_path<S: StorageBackend>(
                 n.id
             } else {
                 let labels = start.labels.clone();
-                let props = resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
+                let props =
+                    resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
                 let id = storage.create_node(labels, props);
                 let node = storage
                     .get_node(id)
@@ -701,7 +703,8 @@ fn execute_create_path<S: StorageBackend>(
             }
         } else {
             let labels = start.labels.clone();
-            let props = resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
+            let props =
+                resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
             storage.create_node(labels, props)
         };
 
@@ -713,7 +716,12 @@ fn execute_create_path<S: StorageBackend>(
                     n.id
                 } else {
                     let labels = elem.node.labels.clone();
-                    let props = resolve_map_literal_to_properties(&elem.node.properties, &rec, params, storage)?;
+                    let props = resolve_map_literal_to_properties(
+                        &elem.node.properties,
+                        &rec,
+                        params,
+                        storage,
+                    )?;
                     let id = storage.create_node(labels, props);
                     let node = storage
                         .get_node(id)
@@ -726,7 +734,12 @@ fn execute_create_path<S: StorageBackend>(
                 }
             } else {
                 let labels = elem.node.labels.clone();
-                let props = resolve_map_literal_to_properties(&elem.node.properties, &rec, params, storage)?;
+                let props = resolve_map_literal_to_properties(
+                    &elem.node.properties,
+                    &rec,
+                    params,
+                    storage,
+                )?;
                 storage.create_node(labels, props)
             };
 
@@ -736,8 +749,12 @@ fn execute_create_path<S: StorageBackend>(
                 .first()
                 .cloned()
                 .unwrap_or_default();
-            let edge_props =
-                resolve_map_literal_to_properties(&elem.relationship.properties, &rec, params, storage)?;
+            let edge_props = resolve_map_literal_to_properties(
+                &elem.relationship.properties,
+                &rec,
+                params,
+                storage,
+            )?;
 
             let (src, dst) = match elem.relationship.direction {
                 Direction::Incoming => (dst_id, prev_id),
@@ -1106,7 +1123,8 @@ fn execute_merge<S: StorageBackend>(
 
             let labels = np.labels.clone();
             let empty_rec = Record::new();
-            let properties = resolve_map_literal_to_properties(&np.properties, &empty_rec, params, storage)?;
+            let properties =
+                resolve_map_literal_to_properties(&np.properties, &empty_rec, params, storage)?;
 
             // Find all existing nodes matching labels and properties.
             // MERGE runs ON MATCH for every matching node (not just the first),
