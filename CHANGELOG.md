@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 1000 件以上の CREATE パターンを含むクエリ（例: `CREATE (a0)-[:R]->(b0), (a1)-[:R]->(b1), ...` を 1000 個）で発生していた `RuntimeError: memory access out of bounds` を修正。プランナーが生成する 1000 段の `CreatePath`/`CreateNode` チェーンをエグゼキューターで再帰的に処理していたため、WASM 環境でスタックオーバーフローが発生していた。`CreatePath`/`CreateNode` チェーンを反復処理に変換することで修正。
 
+### Changed
+
+- 複数の `MATCH` 句を連結するクエリ（例: 1000 個の MATCH + CREATE）のパフォーマンスを改善。`CartesianProduct` の結合処理で、両側が各 1 レコードの場合（プロパティ指定による一意ルックアップの連鎖で頻出）に HashMap の clone を省略し、in-place extend で結合するファストパスを追加。
+
 ## [wasm-0.3.1] - 2026-04-15
 
 ### Fixed

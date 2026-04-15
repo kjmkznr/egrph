@@ -446,24 +446,28 @@ fn execute_to_records<S: StorageBackend>(
                     }
                 }
 
-                // For each accumulated row, combine with each right row.
-                let merged_cap = acc_records.first().map(|r| r.len()).unwrap_or(0)
-                    + right_records.first().map(|r| r.len()).unwrap_or(0);
-                let mut next_acc =
-                    Vec::with_capacity(acc_records.len() * right_records.len().max(1));
-                for left_rec in &acc_records {
-                    for right_rec in &right_records {
-                        let mut merged = HashMap::with_capacity(merged_cap);
-                        for (k, v) in left_rec {
-                            merged.insert(k.clone(), v.clone());
+                // Fast path: when both sides have exactly one record (very common
+                // for chained MATCH-with-unique-property queries), avoid allocating
+                // a new Vec and cloning the left record — just extend it in place.
+                if acc_records.len() == 1 && right_records.len() == 1 {
+                    let right_rec = right_records.into_iter().next().unwrap();
+                    acc_records[0].extend(right_rec);
+                } else {
+                    // General case: full cartesian product
+                    let merged_cap = acc_records.first().map(|r| r.len()).unwrap_or(0)
+                        + right_records.first().map(|r| r.len()).unwrap_or(0);
+                    let mut next_acc =
+                        Vec::with_capacity(acc_records.len() * right_records.len().max(1));
+                    for left_rec in &acc_records {
+                        for right_rec in &right_records {
+                            let mut merged = HashMap::with_capacity(merged_cap);
+                            merged.extend(left_rec.iter().map(|(k, v)| (k.clone(), v.clone())));
+                            merged.extend(right_rec.iter().map(|(k, v)| (k.clone(), v.clone())));
+                            next_acc.push(merged);
                         }
-                        for (k, v) in right_rec {
-                            merged.insert(k.clone(), v.clone());
-                        }
-                        next_acc.push(merged);
                     }
+                    acc_records = next_acc;
                 }
-                acc_records = next_acc;
             }
 
             Ok((cols, acc_records))
