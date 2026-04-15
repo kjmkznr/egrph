@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wasm-0.3.1] - 2026-04-15
+
+### Fixed
+
+- 複数の `MATCH` 句を含むクエリ（例: 300 ペア）で発生していた `RuntimeError: memory access out of bounds` を修正。プランナーが生成する左偏り `CartesianProduct` ツリーをエグゼキューターで再帰的に処理していたため、深いスタックオーバーフローが WASM 環境で発生していた。`CartesianProduct` チェーンを反復処理に変換することで修正。
+
 ## [wasm-0.3.0] - 2026-04-15
 
 ### Added

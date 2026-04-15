@@ -2045,6 +2045,57 @@ mod tests {
     }
 
     #[test]
+    fn test_many_match_pairs_no_stack_overflow() {
+        // Regression test: 300 MATCH pairs used to produce a 300-level deep
+        // CartesianProduct tree which caused a stack overflow (visible as
+        // "memory access out of bounds" in WASM).  The fix flattens the
+        // left-leaning CartesianProduct chain into an iterative loop.
+        let mut g = Graph::new();
+
+        // Insert 20 nodes
+        let node_count = 20usize;
+        for i in 0..node_count {
+            g.execute(&format!(
+                "CREATE (:Person {{gnId: \"node-{}\", name: \"Person {}\"}})",
+                i + 1,
+                i + 1
+            ))
+            .unwrap();
+        }
+        assert_eq!(g.node_count(), node_count);
+
+        // Build a query with 50 MATCH pairs and one CREATE
+        let batch_size = 50usize;
+        let mut match_lines = Vec::new();
+        let mut create_parts = Vec::new();
+        for i in 1..=batch_size {
+            let src = (i % node_count) + 1;
+            let dst = ((i * 3 + 1) % node_count) + 1;
+            if src != dst {
+                let idx = i - 1;
+                match_lines.push(format!(
+                    "MATCH (_a{}:Person {{gnId: \"node-{}\"}}), (_b{}:Person {{gnId: \"node-{}\"}})",
+                    idx, src, idx, dst
+                ));
+                create_parts.push(format!(
+                    "(_a{})-[:KNOWS {{weight: {}}}]->(_b{})",
+                    idx,
+                    i % 10,
+                    idx
+                ));
+            }
+        }
+        let query = format!(
+            "{}\nCREATE {}",
+            match_lines.join("\n"),
+            create_parts.join(", ")
+        );
+        // Must not panic or overflow the stack
+        g.execute(&query).unwrap();
+        assert!(g.edge_count() > 0);
+    }
+
+    #[test]
     fn test_create_unique_constraint_no_conflict_other_label() {
         let mut g = Graph::new();
         g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.gnId IS UNIQUE")

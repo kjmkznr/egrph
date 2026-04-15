@@ -376,37 +376,53 @@ fn execute_to_records<S: StorageBackend>(
             params,
         ),
 
-        LogicalPlan::CartesianProduct { left, right } => {
-            let (left_cols, left_records) = execute_to_records(left, storage, params)?;
-            let (right_cols, right_records) = execute_to_records(right, storage, params)?;
+        LogicalPlan::CartesianProduct { .. } => {
+            // Collect the left-leaning chain of CartesianProduct nodes iteratively
+            // to avoid deep recursion (e.g. 300 MATCH pairs produce a 300-level deep
+            // left-skewed tree, which would overflow the WASM stack).
+            let mut legs: Vec<&LogicalPlan> = Vec::new();
+            let mut current = plan;
+            while let LogicalPlan::CartesianProduct { left, right } = current {
+                legs.push(right.as_ref());
+                current = left.as_ref();
+            }
+            // `current` is now the leftmost non-CartesianProduct leaf
+            legs.push(current);
+            legs.reverse(); // legs[0] = leftmost leaf, legs[last] = rightmost right child
 
-            // Merge column lists, preserving order and deduplicating
-            let mut cols = left_cols.clone();
-            for c in &right_cols {
-                if !cols.contains(c) {
-                    cols.push(c.clone());
+            // Execute each leg and combine iteratively
+            let (mut cols, mut acc_records) = execute_to_records(legs[0], storage, params)?;
+            for leg in &legs[1..] {
+                let (right_cols, right_records) = execute_to_records(leg, storage, params)?;
+
+                // Merge column lists, preserving order and deduplicating
+                for c in &right_cols {
+                    if !cols.contains(c) {
+                        cols.push(c.clone());
+                    }
                 }
+
+                // For each accumulated row, combine with each right row.
+                let merged_cap =
+                    acc_records.first().map(|r| r.len()).unwrap_or(0) + right_records.first().map(|r| r.len()).unwrap_or(0);
+                let mut next_acc =
+                    Vec::with_capacity(acc_records.len() * right_records.len().max(1));
+                for left_rec in &acc_records {
+                    for right_rec in &right_records {
+                        let mut merged = HashMap::with_capacity(merged_cap);
+                        for (k, v) in left_rec {
+                            merged.insert(k.clone(), v.clone());
+                        }
+                        for (k, v) in right_rec {
+                            merged.insert(k.clone(), v.clone());
+                        }
+                        next_acc.push(merged);
+                    }
+                }
+                acc_records = next_acc;
             }
 
-            // For each left row, produce one output row combined with each right row.
-            // Pre-allocate with left+right capacity to avoid reallocation when merging.
-            let merged_cap = left_records.first().map(|r| r.len()).unwrap_or(0)
-                + right_records.first().map(|r| r.len()).unwrap_or(0);
-            let mut result = Vec::with_capacity(left_records.len() * right_records.len().max(1));
-            for left_rec in &left_records {
-                for right_rec in &right_records {
-                    let mut merged = HashMap::with_capacity(merged_cap);
-                    for (k, v) in left_rec {
-                        merged.insert(k.clone(), v.clone());
-                    }
-                    for (k, v) in right_rec {
-                        merged.insert(k.clone(), v.clone());
-                    }
-                    result.push(merged);
-                }
-            }
-
-            Ok((cols, result))
+            Ok((cols, acc_records))
         }
 
         LogicalPlan::LeftOuterJoin { left, right } => {
