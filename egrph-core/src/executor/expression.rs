@@ -4,15 +4,48 @@ use crate::graph::backend::StorageBackend;
 use crate::graph::types::*;
 use regex::Regex;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-// Thread-local cache so each compiled Regex is built at most once per thread.
+/// Thread-local LRU regex cache: compiled patterns are stored keyed by their
+/// anchored form.  A `VecDeque` tracks insertion order so the oldest entry is
+/// evicted first when the cache reaches capacity.
+struct RegexCache {
+    map: HashMap<String, Option<Regex>>,
+    order: VecDeque<String>,
+}
+
+impl RegexCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// Look up a compiled regex, compiling and inserting it if absent.
+    /// Evicts the oldest entry when the cache is full.
+    fn get_or_insert(&mut self, pattern: &str) -> Option<&Regex> {
+        if !self.map.contains_key(pattern) {
+            if self.map.len() >= REGEX_CACHE_MAX_ENTRIES {
+                // Evict the oldest entry (front of the insertion-order queue).
+                if let Some(oldest) = self.order.pop_front() {
+                    self.map.remove(&oldest);
+                }
+            }
+            let compiled = Regex::new(pattern).ok();
+            self.map.insert(pattern.to_string(), compiled);
+            self.order.push_back(pattern.to_string());
+        }
+        self.map.get(pattern)?.as_ref()
+    }
+}
+
 thread_local! {
-    static REGEX_CACHE: RefCell<HashMap<String, Option<Regex>>> = RefCell::new(HashMap::new());
+    static REGEX_CACHE: RefCell<RegexCache> = RefCell::new(RegexCache::new());
 }
 
 /// Maximum number of compiled regex patterns to keep per thread before evicting
-/// the oldest entry. This bounds per-thread memory usage for regex-heavy workloads.
+/// the oldest (LRU) entry.  This bounds per-thread memory usage for regex-heavy workloads.
 const REGEX_CACHE_MAX_ENTRIES: usize = 256;
 
 /// A record is a mapping of variable names to CypherValues.
@@ -439,18 +472,10 @@ fn eval_regex_match(value: &CypherValue, pattern: &CypherValue) -> CypherValue {
             // are anchored correctly as a whole: "^(?:a|b)$".
             let full_pattern = format!("^(?:{})$", p);
             let is_match = REGEX_CACHE.with(|cache| {
-                let mut map = cache.borrow_mut();
-                // Evict oldest entry when cache reaches limit to bound memory usage.
-                if map.len() >= REGEX_CACHE_MAX_ENTRIES
-                    && !map.contains_key(&full_pattern)
-                    && let Some(key) = map.keys().next().cloned()
-                {
-                    map.remove(&key);
-                }
-                let entry = map
-                    .entry(full_pattern.clone())
-                    .or_insert_with(|| Regex::new(&full_pattern).ok());
-                entry.as_ref().map(|re| re.is_match(s))
+                cache
+                    .borrow_mut()
+                    .get_or_insert(&full_pattern)
+                    .map(|re| re.is_match(s))
             });
             match is_match {
                 Some(b) => CypherValue::Boolean(b),

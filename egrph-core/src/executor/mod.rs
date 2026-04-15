@@ -1165,9 +1165,12 @@ fn execute_var_length_expand<S: StorageBackend>(
         cols.push(dst_variable.to_string());
     }
 
-    // Hard ceiling to prevent runaway BFS on unbounded patterns (`-[*]->`).
+    // Default ceiling for unbounded variable-length patterns (`-[*]->`).
     // Bounded patterns (`-[*..N]->`) use the user-specified max directly.
+    // Unbounded patterns that reach this limit return a query error instead of
+    // silently truncating results, so callers are aware they need an explicit bound.
     const BFS_DEFAULT_MAX_HOPS: u64 = 100;
+    let is_unbounded = max_hops.is_none();
     let effective_max = max_hops.unwrap_or(BFS_DEFAULT_MAX_HOPS);
     let mut result_records = Vec::new();
 
@@ -1188,6 +1191,13 @@ fn execute_var_length_expand<S: StorageBackend>(
             let depth = path_edge_ids.len() as u64;
 
             if depth >= effective_max {
+                if is_unbounded {
+                    return Err(CypherError::RuntimeError(format!(
+                        "Variable-length path traversal exceeded the default limit of {} hops. \
+                         Use an explicit upper bound, e.g. [*..{}], to suppress this error.",
+                        BFS_DEFAULT_MAX_HOPS, BFS_DEFAULT_MAX_HOPS
+                    )));
+                }
                 continue;
             }
 

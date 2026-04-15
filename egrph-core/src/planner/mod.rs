@@ -122,7 +122,7 @@ fn plan_match_scan(
                 .variable
                 .clone()
                 .or_else(|| part.variable.clone())
-                .unwrap_or_else(|| format!("_anon_{}", part_idx));
+                .unwrap_or_else(|| format!("__egrph_anon_{}__", part_idx));
 
             let mut current = LogicalPlan::ScanNodes {
                 label_filter,
@@ -156,7 +156,7 @@ fn plan_match_scan(
                 .variable
                 .clone()
                 .or_else(|| part.variable.clone())
-                .unwrap_or_else(|| format!("_anon_start_{}", part_idx));
+                .unwrap_or_else(|| format!("__egrph_anon_start_{}__", part_idx));
 
             let mut current = LogicalPlan::ScanNodes {
                 label_filter: start_label,
@@ -188,7 +188,7 @@ fn plan_match_scan(
                     .node
                     .variable
                     .clone()
-                    .unwrap_or_else(|| format!("_anon_dst_{}", i));
+                    .unwrap_or_else(|| format!("__egrph_anon_dst_{}__", i));
 
                 let src_var = if i == 0 {
                     start_var.clone()
@@ -197,7 +197,7 @@ fn plan_match_scan(
                         .node
                         .variable
                         .clone()
-                        .unwrap_or_else(|| format!("_anon_dst_{}", i - 1))
+                        .unwrap_or_else(|| format!("__egrph_anon_dst_{}__", i - 1))
                 };
 
                 if let Some(range) = &chain_elem.relationship.range {
@@ -231,7 +231,7 @@ fn plan_match_scan(
                         .node
                         .variable
                         .clone()
-                        .unwrap_or_else(|| format!("_anon_dst_{}", i));
+                        .unwrap_or_else(|| format!("__egrph_anon_dst_{}__", i));
                     current = LogicalPlan::Filter {
                         input: Box::new(current),
                         predicate: Expression::FunctionCall {

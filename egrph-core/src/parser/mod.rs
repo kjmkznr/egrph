@@ -925,7 +925,10 @@ fn parse_comparison_expression(
     }
 
     let mut iter = parts.into_iter();
-    let mut expr = parse_string_predicate_expression(iter.next().unwrap())?;
+    let mut expr = parse_string_predicate_expression(
+        iter.next()
+            .ok_or_else(|| CypherError::ParseError("Empty comparison expression".to_string()))?,
+    )?;
 
     while let Some(op_pair) = iter.next() {
         let right_pair = iter
@@ -1021,7 +1024,10 @@ fn parse_add_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression,
     }
 
     let mut iter = parts.into_iter();
-    let mut expr = parse_mult_expression(iter.next().unwrap())?;
+    let mut expr = parse_mult_expression(
+        iter.next()
+            .ok_or_else(|| CypherError::ParseError("Empty add expression".to_string()))?,
+    )?;
 
     while let Some(op_pair) = iter.next() {
         let op = match op_pair.as_str() {
@@ -1054,7 +1060,10 @@ fn parse_mult_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression
     }
 
     let mut iter = parts.into_iter();
-    let mut expr = parse_power_expression(iter.next().unwrap())?;
+    let mut expr =
+        parse_power_expression(iter.next().ok_or_else(|| {
+            CypherError::ParseError("Empty multiplication expression".to_string())
+        })?)?;
 
     while let Some(op_pair) = iter.next() {
         let op = match op_pair.as_str() {
@@ -1093,7 +1102,9 @@ fn parse_power_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expressio
         .collect::<Result<Vec<_>, _>>()?;
 
     // Right-associative: a ^ b ^ c = a ^ (b ^ c)
-    let mut expr = exprs.pop().unwrap();
+    let mut expr = exprs
+        .pop()
+        .ok_or_else(|| CypherError::ParseError("Empty power expression".to_string()))?;
     while let Some(left) = exprs.pop() {
         expr = Expression::BinaryOp {
             left: Box::new(left),
@@ -1155,10 +1166,12 @@ fn parse_postfix_expression(pair: pest::iterators::Pair<Rule>) -> Result<Express
                             continue;
                         };
                         let prop_name = prop_pair.as_str().to_string();
-                        expr = Some(Expression::Property(
-                            Box::new(expr.take().unwrap()),
-                            prop_name,
-                        ));
+                        let base = expr.take().ok_or_else(|| {
+                            CypherError::ParseError(
+                                "Expected expression before property access".to_string(),
+                            )
+                        })?;
+                        expr = Some(Expression::Property(Box::new(base), prop_name));
                     }
                     Rule::subscript => {
                         let Some(content) = op_inner.into_inner().next() else {
@@ -1170,16 +1183,26 @@ fn parse_postfix_expression(pair: pest::iterators::Pair<Rule>) -> Result<Express
                         match content_inner.as_rule() {
                             Rule::slice_range => {
                                 let (start, end) = parse_slice_range(content_inner)?;
+                                let base = expr.take().ok_or_else(|| {
+                                    CypherError::ParseError(
+                                        "Expected expression before slice operator".to_string(),
+                                    )
+                                })?;
                                 expr = Some(Expression::ListSlice {
-                                    expr: Box::new(expr.take().unwrap()),
+                                    expr: Box::new(base),
                                     start,
                                     end,
                                 });
                             }
                             Rule::expression => {
                                 let key = parse_expression(content_inner)?;
+                                let base = expr.take().ok_or_else(|| {
+                                    CypherError::ParseError(
+                                        "Expected expression before subscript operator".to_string(),
+                                    )
+                                })?;
                                 expr = Some(Expression::DynamicProperty {
-                                    expr: Box::new(expr.take().unwrap()),
+                                    expr: Box::new(base),
                                     key: Box::new(key),
                                 });
                             }

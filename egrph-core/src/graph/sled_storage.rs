@@ -62,12 +62,12 @@ fn encode<T: serde::Serialize>(v: &T) -> Vec<u8> {
     bincode::serialize(v).expect("bincode encode")
 }
 
-fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
-    bincode::deserialize(bytes).expect("bincode decode")
+fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+    bincode::deserialize(bytes).ok()
 }
 
-fn read_u64(bytes: &[u8]) -> u64 {
-    u64::from_be_bytes(bytes.try_into().expect("8-byte counter"))
+fn read_u64(bytes: &[u8]) -> Option<u64> {
+    bytes.try_into().ok().map(u64::from_be_bytes)
 }
 
 fn write_u64(v: u64) -> [u8; 8] {
@@ -102,7 +102,7 @@ impl SledStorage {
             .get(b"next_node_id")
             .ok()
             .flatten()
-            .map(|v| read_u64(&v))
+            .and_then(|v| read_u64(&v))
             .unwrap_or(0)
     }
 
@@ -117,7 +117,7 @@ impl SledStorage {
             .get(b"next_edge_id")
             .ok()
             .flatten()
-            .map(|v| read_u64(&v))
+            .and_then(|v| read_u64(&v))
             .unwrap_or(0)
     }
 
@@ -131,7 +131,7 @@ impl SledStorage {
         tree.get(u64_key(node_id))
             .ok()
             .flatten()
-            .map(|v| decode::<Vec<EdgeId>>(&v))
+            .and_then(|v| decode::<Vec<EdgeId>>(&v))
             .unwrap_or_default()
     }
 
@@ -219,11 +219,11 @@ impl StorageBackend for SledStorage {
     }
 
     fn get_node(&self, id: NodeId) -> Option<Node> {
-        self.nodes.get(u64_key(id)).ok()?.map(|v| decode(&v))
+        self.nodes.get(u64_key(id)).ok()?.and_then(|v| decode(&v))
     }
 
     fn get_edge(&self, id: EdgeId) -> Option<Edge> {
-        self.edges.get(u64_key(id)).ok()?.map(|v| decode(&v))
+        self.edges.get(u64_key(id)).ok()?.and_then(|v| decode(&v))
     }
 
     fn node_count(&self) -> usize {
@@ -262,7 +262,7 @@ impl StorageBackend for SledStorage {
                 .nodes
                 .iter()
                 .filter_map(|r| r.ok())
-                .map(|(_, v)| decode(&v))
+                .filter_map(|(_, v)| decode(&v))
                 .collect(),
             Some(l) => {
                 let prefix = label_prefix(l);
@@ -313,7 +313,7 @@ impl StorageBackend for SledStorage {
             self.nodes
                 .iter()
                 .filter_map(|r| r.ok())
-                .map(|(_, v)| decode(&v))
+                .filter_map(|(_, v)| decode(&v))
                 .collect()
         };
 
