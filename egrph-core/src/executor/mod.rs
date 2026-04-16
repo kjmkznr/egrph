@@ -496,42 +496,56 @@ fn execute_to_records<S: StorageBackend>(
                 cols.push(c.clone());
             }
 
+            // Build a composite stable key over the shared-variable values in a
+            // record. Null bytes produced by cypher_value_to_stable_key are already
+            // escaped for strings, so '\x00' is safe as a field separator.
+            let build_key = |rec: &Record| -> String {
+                let mut key = String::new();
+                for (i, sv) in shared_vars.iter().enumerate() {
+                    if i > 0 {
+                        key.push('\x00');
+                    }
+                    key.push_str(&cypher_value_to_stable_key(
+                        rec.get(sv.as_str()).unwrap_or(&CypherValue::Null),
+                    ));
+                }
+                key
+            };
+
+            // Hash-index the right side by the join key so each left row probes
+            // matches in O(1) instead of scanning all right rows.
+            let mut right_index: HashMap<String, Vec<usize>> =
+                HashMap::with_capacity(right_records.len());
+            for (idx, rr) in right_records.iter().enumerate() {
+                right_index.entry(build_key(rr)).or_default().push(idx);
+            }
+
             let mut result = Vec::new();
             for left_rec in &left_records {
-                let matching_right: Vec<&Record> = right_records
-                    .iter()
-                    .filter(|rr| {
-                        shared_vars.iter().all(|sv| {
-                            let lv = cypher_value_to_stable_key(
-                                left_rec.get(sv.as_str()).unwrap_or(&CypherValue::Null),
-                            );
-                            let rv = cypher_value_to_stable_key(
-                                rr.get(sv.as_str()).unwrap_or(&CypherValue::Null),
-                            );
-                            lv == rv
-                        })
-                    })
-                    .collect();
-
-                if matching_right.is_empty() {
-                    // No matching right rows: emit left row with right-only vars as NULL
-                    let mut merged = left_rec.clone();
-                    for v in &right_only_vars {
-                        merged.insert(v.clone(), CypherValue::Null);
-                    }
-                    result.push(merged);
-                } else {
-                    // Matching right rows found: emit one combined row per match
-                    for right_rec in matching_right {
+                let key = build_key(left_rec);
+                match right_index.get(&key) {
+                    None => {
+                        // No matching right rows: emit left row with right-only vars as NULL
                         let mut merged = left_rec.clone();
                         for v in &right_only_vars {
-                            let val = right_rec
-                                .get(v.as_str())
-                                .cloned()
-                                .unwrap_or(CypherValue::Null);
-                            merged.insert(v.clone(), val);
+                            merged.insert(v.clone(), CypherValue::Null);
                         }
                         result.push(merged);
+                    }
+                    Some(right_indices) => {
+                        // Matching right rows found: emit one combined row per match
+                        for &ri in right_indices {
+                            let right_rec = &right_records[ri];
+                            let mut merged = left_rec.clone();
+                            for v in &right_only_vars {
+                                let val = right_rec
+                                    .get(v.as_str())
+                                    .cloned()
+                                    .unwrap_or(CypherValue::Null);
+                                merged.insert(v.clone(), val);
+                            }
+                            result.push(merged);
+                        }
                     }
                 }
             }
