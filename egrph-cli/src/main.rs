@@ -1,7 +1,7 @@
 use clap::Parser;
 use egrph_core::{CypherValue, InMemoryGraph, PropertyValue, QueryResult};
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -160,7 +160,10 @@ impl Shell {
                     self.timer = false;
                     println!("Timer: off");
                 }
-                _ => println!("Timer is currently {}", if self.timer { "on" } else { "off" }),
+                _ => println!(
+                    "Timer is currently {}",
+                    if self.timer { "on" } else { "off" }
+                ),
             },
 
             ".mode" => {
@@ -172,9 +175,9 @@ impl Shell {
                             self.mode = m;
                             println!("Output mode: {}", self.mode.as_str());
                         }
-                        None => eprintln!(
-                            "Unknown mode '{rest}'. Valid modes: table, csv, json, line"
-                        ),
+                        None => {
+                            eprintln!("Unknown mode '{rest}'. Valid modes: table, csv, json, line")
+                        }
                     }
                 }
             }
@@ -293,7 +296,15 @@ impl Shell {
         if result.columns.is_empty() {
             return;
         }
-        println!("{}", result.columns.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","));
+        println!(
+            "{}",
+            result
+                .columns
+                .iter()
+                .map(|c| csv_escape(c))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         for row in &result.rows {
             let values: Vec<String> = row
                 .values
