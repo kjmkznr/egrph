@@ -1258,6 +1258,24 @@ fn execute_merge<S: StorageBackend>(
     }
 }
 
+/// Walk a chain-encoded path backwards and return true if `edge` is already on it.
+/// The arena stores each step as (parent_index, edge_id), so traversal follows parent
+/// links until reaching the empty-path sentinel (`None`).
+fn path_chain_contains(
+    arena: &[(Option<u32>, EdgeId)],
+    mut cur: Option<u32>,
+    edge: EdgeId,
+) -> bool {
+    while let Some(i) = cur {
+        let (parent, e) = arena[i as usize];
+        if e == edge {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_var_length_expand<S: StorageBackend>(
     input: &LogicalPlan,
@@ -1297,16 +1315,18 @@ fn execute_var_length_expand<S: StorageBackend>(
             _ => continue,
         };
 
-        // BFS state: (current_node_id, path_of_edge_ids_taken)
-        // Storing EdgeIds instead of full Edge structs avoids cloning large Edge objects
-        // at every BFS step; edges are resolved from storage only when emitting results.
-        let mut queue: std::collections::VecDeque<(NodeId, Vec<EdgeId>)> =
+        // BFS state: (current_node_id, path_index, depth).
+        // The path is represented as an index into `path_arena`, where each entry is
+        // (parent_index, edge_id). Extending a path is O(1) (one arena push) instead of
+        // cloning the full Vec<EdgeId> at every step. Prefixes are shared across sibling
+        // paths, so memory use is proportional to unique BFS frontier edges rather than
+        // (paths × depth).
+        let mut path_arena: Vec<(Option<u32>, EdgeId)> = Vec::new();
+        let mut queue: std::collections::VecDeque<(NodeId, Option<u32>, u64)> =
             std::collections::VecDeque::new();
-        queue.push_back((start_id, Vec::new()));
+        queue.push_back((start_id, None, 0));
 
-        while let Some((cur_id, path_edge_ids)) = queue.pop_front() {
-            let depth = path_edge_ids.len() as u64;
-
+        while let Some((cur_id, path_idx, depth)) = queue.pop_front() {
             if depth >= effective_max {
                 if is_unbounded {
                     return Err(CypherError::RuntimeError(format!(
@@ -1336,11 +1356,11 @@ fn execute_var_length_expand<S: StorageBackend>(
                 };
 
                 // Skip edges already in the path (no repeated relationships).
-                if path_edge_ids.contains(&eid) {
+                if path_chain_contains(&path_arena, path_idx, eid) {
                     continue;
                 }
 
-                // Apply relationship type filter before any cloning.
+                // Apply relationship type filter before extending the path.
                 if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
                     continue;
                 }
@@ -1357,9 +1377,15 @@ fn execute_var_length_expand<S: StorageBackend>(
                     }
                 };
 
-                let mut new_path = path_edge_ids.clone();
-                new_path.push(eid);
-                let new_depth = new_path.len() as u64;
+                let new_idx = u32::try_from(path_arena.len()).map_err(|_| {
+                    CypherError::RuntimeError(
+                        "Variable-length path traversal exceeded internal path arena capacity"
+                            .to_string(),
+                    )
+                })?;
+                path_arena.push((path_idx, eid));
+                let new_path_idx = Some(new_idx);
+                let new_depth = depth + 1;
 
                 // Emit a result row when depth is within [min_hops, max_hops].
                 if new_depth >= min_hops
@@ -1367,17 +1393,18 @@ fn execute_var_length_expand<S: StorageBackend>(
                 {
                     let mut new_rec = rec.clone();
                     if let Some(rv) = rel_variable {
-                        // Resolve edges from IDs only at emit time.
-                        new_rec.insert(
-                            rv.to_string(),
-                            CypherValue::List(
-                                new_path
-                                    .iter()
-                                    .filter_map(|id| storage.get_edge(*id))
-                                    .map(CypherValue::Relationship)
-                                    .collect(),
-                            ),
-                        );
+                        // Walk the chain once to resolve edges in traversal order.
+                        let mut edges: Vec<CypherValue> = Vec::with_capacity(new_depth as usize);
+                        let mut cur = new_path_idx;
+                        while let Some(i) = cur {
+                            let (parent, e) = path_arena[i as usize];
+                            if let Some(edge) = storage.get_edge(e) {
+                                edges.push(CypherValue::Relationship(edge));
+                            }
+                            cur = parent;
+                        }
+                        edges.reverse();
+                        new_rec.insert(rv.to_string(), CypherValue::List(edges));
                     }
                     new_rec.insert(dst_variable.to_string(), CypherValue::Node(dst_node));
                     result_records.push(new_rec);
@@ -1385,7 +1412,7 @@ fn execute_var_length_expand<S: StorageBackend>(
 
                 // Continue BFS if we haven't hit the maximum depth.
                 if new_depth < effective_max {
-                    queue.push_back((next_id, new_path));
+                    queue.push_back((next_id, new_path_idx, new_depth));
                 }
             }
         }
