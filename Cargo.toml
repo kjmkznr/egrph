@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "egrph-core",
+    "egrph-cli",
     "egrph-python",
     "egrph-c-abi",
     "egrph-wasm",
