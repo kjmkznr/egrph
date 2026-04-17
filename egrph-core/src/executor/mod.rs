@@ -453,20 +453,35 @@ fn execute_to_records<S: StorageBackend>(
                     let right_rec = right_records.into_iter().next().unwrap();
                     acc_records[0].extend(right_rec);
                 } else {
-                    // General case: full cartesian product
-                    let merged_cap = acc_records.first().map(|r| r.len()).unwrap_or(0)
-                        + right_records.first().map(|r| r.len()).unwrap_or(0);
-                    let mut next_acc =
-                        Vec::with_capacity(acc_records.len() * right_records.len().max(1));
-                    for left_rec in &acc_records {
-                        for right_rec in &right_records {
-                            let mut merged = HashMap::with_capacity(merged_cap);
-                            merged.extend(left_rec.iter().map(|(k, v)| (k.clone(), v.clone())));
-                            merged.extend(right_rec.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    // General case: full cartesian product.
+                    //
+                    // Build each output row by cloning the left record and extending
+                    // with the right entries. Compared to `new() + extend(left) +
+                    // extend(right)`, this saves one HashMap allocation and K_L
+                    // re-inserts per cell. We also consume `acc_records` so the
+                    // final right iteration for each left row *moves* the left
+                    // record instead of cloning it.
+                    let n = acc_records.len();
+                    let m = right_records.len();
+                    if m == 0 || n == 0 {
+                        acc_records = Vec::new();
+                    } else {
+                        let mut next_acc = Vec::with_capacity(n * m);
+                        let (right_last, right_init) = right_records.split_last().unwrap();
+                        for left_rec in acc_records {
+                            for right_rec in right_init {
+                                let mut merged = left_rec.clone();
+                                merged
+                                    .extend(right_rec.iter().map(|(k, v)| (k.clone(), v.clone())));
+                                next_acc.push(merged);
+                            }
+                            // Last right iteration for this left row: move left_rec.
+                            let mut merged = left_rec;
+                            merged.extend(right_last.iter().map(|(k, v)| (k.clone(), v.clone())));
                             next_acc.push(merged);
                         }
+                        acc_records = next_acc;
                     }
-                    acc_records = next_acc;
                 }
             }
 
