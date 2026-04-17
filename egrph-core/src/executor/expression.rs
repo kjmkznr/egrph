@@ -5,6 +5,7 @@ use crate::graph::types::*;
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, OnceLock};
 
 /// Thread-local LRU regex cache: compiled patterns are stored keyed by their
 /// anchored form.  A `VecDeque` tracks insertion order so the oldest entry is
@@ -49,7 +50,96 @@ thread_local! {
 const REGEX_CACHE_MAX_ENTRIES: usize = 256;
 
 /// A record is a mapping of variable names to CypherValues.
-pub type Record = HashMap<String, CypherValue>;
+///
+/// Internally backed by `Arc<HashMap<...>>` so that pipeline stages which
+/// clone records for row multiplication (Expand, VarLengthExpand, Unwind,
+/// CartesianProduct, ...) pay only an atomic refcount bump on `clone()`.
+/// Mutating methods (`insert`, `remove`, `extend`, `retain`) go through
+/// `Arc::make_mut`, producing a unique copy only on first write after a
+/// shared clone (copy-on-write).
+#[derive(Debug, Clone, Default)]
+pub struct Record {
+    inner: Arc<HashMap<String, CypherValue>>,
+}
+
+impl Record {
+    pub fn new() -> Self {
+        // Share a single empty HashMap across every `Record::new()` call so the
+        // countless placeholder records (empty_rec, SKIP/LIMIT eval ctx, etc.)
+        // don't each allocate their own HashMap.
+        static EMPTY: OnceLock<Arc<HashMap<String, CypherValue>>> = OnceLock::new();
+        Self {
+            inner: EMPTY.get_or_init(|| Arc::new(HashMap::new())).clone(),
+        }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            inner: Arc::new(HashMap::with_capacity(cap)),
+        }
+    }
+
+    pub fn insert(&mut self, k: String, v: CypherValue) -> Option<CypherValue> {
+        Arc::make_mut(&mut self.inner).insert(k, v)
+    }
+
+    pub fn remove<Q>(&mut self, k: &Q) -> Option<CypherValue>
+    where
+        String: std::borrow::Borrow<Q>,
+        Q: ?Sized + std::hash::Hash + Eq,
+    {
+        Arc::make_mut(&mut self.inner).remove(k)
+    }
+
+    pub fn extend<I: IntoIterator<Item = (String, CypherValue)>>(&mut self, iter: I) {
+        Arc::make_mut(&mut self.inner).extend(iter)
+    }
+
+    pub fn retain<F: FnMut(&String, &mut CypherValue) -> bool>(&mut self, f: F) {
+        Arc::make_mut(&mut self.inner).retain(f)
+    }
+
+    /// Reserve capacity for at least `additional` more entries.
+    /// Triggers a unique-copy if the inner Arc is shared.
+    pub fn reserve(&mut self, additional: usize) {
+        Arc::make_mut(&mut self.inner).reserve(additional)
+    }
+}
+
+impl std::ops::Deref for Record {
+    type Target = HashMap<String, CypherValue>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl PartialEq for Record {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner) || *self.inner == *other.inner
+    }
+}
+
+impl IntoIterator for Record {
+    type Item = (String, CypherValue);
+    type IntoIter = std::collections::hash_map::IntoIter<String, CypherValue>;
+
+    /// Consumes the record. Moves entries out if the inner `Arc` is uniquely
+    /// owned; otherwise falls back to a deep clone of the backing HashMap.
+    fn into_iter(self) -> Self::IntoIter {
+        Arc::try_unwrap(self.inner)
+            .unwrap_or_else(|arc| (*arc).clone())
+            .into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Record {
+    type Item = (&'a String, &'a CypherValue);
+    type IntoIter = std::collections::hash_map::Iter<'a, String, CypherValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
 
 /// Parameters passed to a query.
 pub type Parameters = HashMap<String, CypherValue>;
