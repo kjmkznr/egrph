@@ -168,7 +168,7 @@ fn execute_to_records<S: StorageBackend>(
 
             let mut result_records = Vec::new();
 
-            for rec in &input_records {
+            for rec in input_records {
                 let src_node_id = match rec.get(src_variable.as_str()) {
                     Some(CypherValue::Node(n)) => n.id,
                     _ => continue,
@@ -184,11 +184,14 @@ fn execute_to_records<S: StorageBackend>(
                     }
                 };
 
+                // Resolve all matched (edge, dst_node) pairs first so we know the
+                // final emission — that one can consume `rec` by move rather than
+                // clone, saving one Arc::make_mut deep-copy per input row.
+                let mut matched: Vec<(Edge, Node)> = Vec::new();
                 for edge in edges {
                     if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
                         continue;
                     }
-
                     let dst_id = match direction {
                         Direction::Outgoing => edge.dst,
                         Direction::Incoming => edge.src,
@@ -200,15 +203,28 @@ fn execute_to_records<S: StorageBackend>(
                             }
                         }
                     };
-
                     if let Some(dst_node) = storage.get_node(dst_id) {
-                        let mut new_rec = rec.clone();
-                        if let Some(rv) = rel_variable {
-                            new_rec.insert(rv.clone(), CypherValue::Relationship(edge.clone()));
-                        }
-                        new_rec.insert(dst_variable.clone(), CypherValue::Node(dst_node));
-                        result_records.push(new_rec);
+                        matched.push((edge, dst_node));
                     }
+                }
+
+                let mut pending = Some(rec);
+                let n = matched.len();
+                for (i, (edge, dst_node)) in matched.into_iter().enumerate() {
+                    let is_last = i + 1 == n;
+                    let mut new_rec = if is_last {
+                        pending.take().expect("pending present on last iteration")
+                    } else {
+                        pending
+                            .as_ref()
+                            .expect("pending present mid-iteration")
+                            .clone()
+                    };
+                    if let Some(rv) = rel_variable {
+                        new_rec.insert(rv.clone(), CypherValue::Relationship(edge));
+                    }
+                    new_rec.insert(dst_variable.clone(), CypherValue::Node(dst_node));
+                    result_records.push(new_rec);
                 }
             }
 
@@ -456,11 +472,12 @@ fn execute_to_records<S: StorageBackend>(
                     // General case: full cartesian product.
                     //
                     // Build each output row by cloning the left record and extending
-                    // with the right entries. Compared to `new() + extend(left) +
-                    // extend(right)`, this saves one HashMap allocation and K_L
-                    // re-inserts per cell. We also consume `acc_records` so the
-                    // final right iteration for each left row *moves* the left
-                    // record instead of cloning it.
+                    // with the right entries. With Arc-backed Records, the per-cell
+                    // `left_rec.clone()` is just an Arc bump and the first `extend`
+                    // triggers `make_mut`'s deep copy. We also consume `acc_records`
+                    // so the final right iteration for each left row *moves* the
+                    // left record — its Arc refcount drops to 1 and `make_mut`
+                    // mutates in place, saving one HashMap deep copy per left row.
                     let n = acc_records.len();
                     let m = right_records.len();
                     if m == 0 || n == 0 {
@@ -536,22 +553,37 @@ fn execute_to_records<S: StorageBackend>(
             }
 
             let mut result = Vec::new();
-            for left_rec in &left_records {
-                let key = build_key(left_rec);
+            // Consume left_records by value so the final emission per left row
+            // can move `left_rec` (Arc refcount 1 -> make_mut mutates in place,
+            // saving one HashMap deep copy).
+            for left_rec in left_records {
+                let key = build_key(&left_rec);
                 match right_index.get(&key) {
                     None => {
-                        // No matching right rows: emit left row with right-only vars as NULL
-                        let mut merged = left_rec.clone();
+                        // No matching right rows: emit left row with right-only vars as NULL.
+                        // Move left_rec — refcount becomes 1, so insert is in-place.
+                        let mut merged = left_rec;
                         for v in &right_only_vars {
                             merged.insert(v.clone(), CypherValue::Null);
                         }
                         result.push(merged);
                     }
                     Some(right_indices) => {
-                        // Matching right rows found: emit one combined row per match
-                        for &ri in right_indices {
+                        // Matching right rows: emit one combined row per match.
+                        // Clone left_rec for all but the last; move it on the last.
+                        let mut pending = Some(left_rec);
+                        let n = right_indices.len();
+                        for (i, &ri) in right_indices.iter().enumerate() {
+                            let is_last = i + 1 == n;
                             let right_rec = &right_records[ri];
-                            let mut merged = left_rec.clone();
+                            let mut merged = if is_last {
+                                pending.take().expect("pending present on last iteration")
+                            } else {
+                                pending
+                                    .as_ref()
+                                    .expect("pending present mid-iteration")
+                                    .clone()
+                            };
                             for v in &right_only_vars {
                                 let val = right_rec
                                     .get(v.as_str())
@@ -957,12 +989,22 @@ fn execute_unwind<S: StorageBackend>(
 
     let mut result_records = Vec::new();
 
-    for rec in &input_records {
-        let list_val = eval_with_params(expression, rec, params, storage)?;
+    for rec in input_records {
+        let list_val = eval_with_params(expression, &rec, params, storage)?;
         match list_val {
             CypherValue::List(items) => {
-                for item in items {
-                    let mut new_rec = rec.clone();
+                let n = items.len();
+                let mut pending = Some(rec);
+                for (i, item) in items.into_iter().enumerate() {
+                    let is_last = i + 1 == n;
+                    let mut new_rec = if is_last {
+                        pending.take().expect("pending present on last iteration")
+                    } else {
+                        pending
+                            .as_ref()
+                            .expect("pending present mid-iteration")
+                            .clone()
+                    };
                     new_rec.insert(alias.to_string(), item);
                     result_records.push(new_rec);
                 }
