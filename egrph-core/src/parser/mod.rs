@@ -1291,6 +1291,7 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
         Rule::list_comprehension => parse_list_comprehension(inner),
         Rule::filter_predicate => parse_filter_predicate(inner),
         Rule::reduce_expression => parse_reduce_expression(inner),
+        Rule::exists_expression => parse_exists_expression(inner),
         Rule::literal => parse_literal(inner),
         Rule::parameter => parse_parameter(inner),
         Rule::function_invocation => parse_function_invocation(inner),
@@ -1306,6 +1307,21 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
             inner.as_rule()
         ))),
     }
+}
+
+fn parse_exists_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
+    // exists_kw ~ "{" ~ pattern_element ~ "}"
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::pattern_element {
+            let element = parse_pattern_element(inner)?;
+            return Ok(Expression::Exists {
+                pattern: Box::new(element),
+            });
+        }
+    }
+    Err(CypherError::ParseError(
+        "EXISTS expression missing pattern".to_string(),
+    ))
 }
 
 fn parse_filter_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {

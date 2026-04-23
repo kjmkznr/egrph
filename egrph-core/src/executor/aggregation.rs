@@ -102,7 +102,10 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
                     .map(|m| expr_contains_aggregation(m))
                     .unwrap_or(false)
         }
-        Expression::Literal(_) | Expression::Variable(_) | Expression::Parameter(_) => false,
+        Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::Parameter(_)
+        | Expression::Exists { .. } => false,
         Expression::FilterPredicate {
             list, predicate, ..
         } => expr_contains_aggregation(list) || expr_contains_aggregation(predicate),

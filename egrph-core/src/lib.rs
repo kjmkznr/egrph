@@ -2171,4 +2171,219 @@ mod tests {
             assert!(cypher.contains("x: 1"));
         }
     }
+
+    // ─── EXISTS subquery tests ────────────────────────────────────────────────
+
+    fn setup_exists_graph() -> Graph {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name:'Bob'})").unwrap();
+        g.execute("CREATE (:Car {model:'Tesla', year:2020})")
+            .unwrap();
+        g.execute("MATCH (p:Person {name:'Bob'}), (c:Car) CREATE (p)-[:OWNS {primary:true}]->(c)")
+            .unwrap();
+        g
+    }
+
+    #[test]
+    fn test_exists_simple_pattern() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS]->() } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_not_exists_negation() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE NOT EXISTS { (p)-[:OWNS]->() } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_with_target_label() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS]->(:Car) } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_with_wrong_target_label() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS]->(:Boat) } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_exists_with_node_properties() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS]->({year:2020}) } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_with_node_properties_no_match() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS]->({year:1999}) } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_exists_with_rel_properties() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute(
+                "MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS {primary:true}]->() } RETURN p.name",
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_with_rel_properties_no_match() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute(
+                "MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS {primary:false}]->() } RETURN p.name",
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_exists_direction_incoming() {
+        let mut g = setup_exists_graph();
+        // Car should have an incoming OWNS edge
+        let result = g
+            .execute("MATCH (c:Car) WHERE EXISTS { (c)<-[:OWNS]-() } RETURN c.model")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Tesla".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_direction_undirected() {
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS]-() } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_multi_hop() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name:'Bob'})").unwrap();
+        g.execute("CREATE (:Car {model:'Tesla'})").unwrap();
+        // Alice KNOWS Bob; Bob OWNS Car
+        g.execute(
+            "MATCH (a:Person {name:'Alice'}), (b:Person {name:'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+        g.execute("MATCH (b:Person {name:'Bob'}), (c:Car) CREATE (b)-[:OWNS]->(c)")
+            .unwrap();
+
+        let result = g
+            .execute(
+                "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->()-[:OWNS]->(:Car) } RETURN p.name",
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_rel_type_alternation() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name:'Bob'})").unwrap();
+        g.execute("CREATE (:Car {model:'Tesla'})").unwrap();
+        g.execute("MATCH (p:Person {name:'Bob'}), (c:Car) CREATE (p)-[:LEASES]->(c)")
+            .unwrap();
+
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (p)-[:OWNS|LEASES]->() } RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_scalar_function_regression() {
+        // The existing exists(expr) scalar function must still work
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})").unwrap();
+        g.execute("CREATE (:Person {})").unwrap();
+        let result = g
+            .execute("MATCH (p:Person) WHERE exists(p.name) RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_var_length_unsupported() {
+        let mut g = setup_exists_graph();
+        let result = g.execute("MATCH (p:Person) WHERE EXISTS { (p)-[*1..3]->() } RETURN p.name");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_exists_only_node_pattern() {
+        // EXISTS { (:Car) } — no relationship, just checks node existence
+        let mut g = setup_exists_graph();
+        let result = g
+            .execute("MATCH (p:Person) WHERE EXISTS { (:Car) } RETURN p.name")
+            .unwrap();
+        // Both Alice and Bob match since there is at least one Car node
+        assert_eq!(result.rows.len(), 2);
+    }
 }

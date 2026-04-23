@@ -169,6 +169,7 @@ in_kw  = @{ ^"IN" ~ !ASCII_ALPHANUMERIC }
 starts_with_kw = @{ ^"STARTS" ~ WHITESPACE+ ~ ^"WITH" ~ !ASCII_ALPHANUMERIC }
 ends_with_kw   = @{ ^"ENDS" ~ WHITESPACE+ ~ ^"WITH" ~ !ASCII_ALPHANUMERIC }
 contains_kw    = @{ ^"CONTAINS" ~ !ASCII_ALPHANUMERIC }
+exists_kw      = @{ ^"EXISTS" ~ !ASCII_ALPHANUMERIC }
 
 // --- Atoms ---
 atom = {
@@ -176,6 +177,7 @@ atom = {
   | list_comprehension
   | filter_predicate
   | reduce_expression
+  | exists_expression
   | literal
   | parameter
   | function_invocation
@@ -208,6 +210,10 @@ filter_pred_kw = @{ (^"ANY" | ^"ALL" | ^"NONE" | ^"SINGLE") ~ !ASCII_ALPHANUMERI
 // reduce(accumulator = init, variable IN list | expr)
 reduce_expression = { reduce_kw ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ variable ~ in_kw ~ expression ~ pipe_op ~ expression ~ ")" }
 reduce_kw = @{ ^"REDUCE" ~ !ASCII_ALPHANUMERIC }
+
+// --- EXISTS subquery expression ---
+// EXISTS { pattern_element } — returns true if the pattern has at least one match.
+exists_expression = { exists_kw ~ "{" ~ pattern_element ~ "}" }
 
 // --- Parameter ---
 parameter = { "$" ~ IDENTIFIER }
