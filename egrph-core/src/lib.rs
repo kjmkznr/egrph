@@ -2555,60 +2555,93 @@ mod tests {
     #[test]
     fn test_node_pattern_integer_property() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: 'Alice', age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: 'Bob', age: 25})").unwrap();
-        g.execute("CREATE (:Person {name: 'Charlie', age: 30})").unwrap();
+        g.execute("CREATE (:Person {name: 'Alice', age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Bob', age: 25})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Charlie', age: 30})")
+            .unwrap();
 
         let result = g
             .execute("MATCH (n:Person {age: 30}) RETURN n.name ORDER BY n.name")
             .unwrap();
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
-        assert_eq!(result.rows[1].values[0], CypherValue::String("Charlie".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("Charlie".to_string())
+        );
     }
 
     #[test]
     fn test_node_pattern_boolean_property() {
         let mut g = Graph::new();
-        g.execute("CREATE (:User {name: 'Alice', active: true})").unwrap();
-        g.execute("CREATE (:User {name: 'Bob', active: false})").unwrap();
-        g.execute("CREATE (:User {name: 'Carol', active: true})").unwrap();
+        g.execute("CREATE (:User {name: 'Alice', active: true})")
+            .unwrap();
+        g.execute("CREATE (:User {name: 'Bob', active: false})")
+            .unwrap();
+        g.execute("CREATE (:User {name: 'Carol', active: true})")
+            .unwrap();
 
         let result = g
             .execute("MATCH (u:User {active: true}) RETURN u.name ORDER BY u.name")
             .unwrap();
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
-        assert_eq!(result.rows[1].values[0], CypherValue::String("Carol".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("Carol".to_string())
+        );
     }
 
     #[test]
     fn test_node_pattern_float_property() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Product {name: 'A', score: 4.5})").unwrap();
-        g.execute("CREATE (:Product {name: 'B', score: 3.0})").unwrap();
-        g.execute("CREATE (:Product {name: 'C', score: 4.5})").unwrap();
+        g.execute("CREATE (:Product {name: 'A', score: 4.5})")
+            .unwrap();
+        g.execute("CREATE (:Product {name: 'B', score: 3.0})")
+            .unwrap();
+        g.execute("CREATE (:Product {name: 'C', score: 4.5})")
+            .unwrap();
 
         let result = g
             .execute("MATCH (p:Product {score: 4.5}) RETURN p.name ORDER BY p.name")
             .unwrap();
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("A".to_string()));
-        assert_eq!(result.rows[1].values[0], CypherValue::String("C".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("A".to_string())
+        );
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("C".to_string())
+        );
     }
 
     #[test]
     fn test_node_pattern_multiple_properties() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: 'Alice', age: 30, active: true})").unwrap();
-        g.execute("CREATE (:Person {name: 'Bob', age: 30, active: false})").unwrap();
-        g.execute("CREATE (:Person {name: 'Charlie', age: 25, active: true})").unwrap();
+        g.execute("CREATE (:Person {name: 'Alice', age: 30, active: true})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Bob', age: 30, active: false})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Charlie', age: 25, active: true})")
+            .unwrap();
 
         let result = g
             .execute("MATCH (n:Person {age: 30, active: true}) RETURN n.name")
             .unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
     }
 
     #[test]
@@ -2617,18 +2650,21 @@ mod tests {
         g.execute("CREATE ({name: 'Alice', age: 30})").unwrap();
         g.execute("CREATE ({name: 'Bob', age: 25})").unwrap();
 
-        let result = g
-            .execute("MATCH (n {age: 30}) RETURN n.name")
-            .unwrap();
+        let result = g.execute("MATCH (n {age: 30}) RETURN n.name").unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
     }
 
     #[test]
     fn test_node_pattern_property_no_match() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: 'Alice', age: 30})").unwrap();
-        g.execute("CREATE (:Person {name: 'Bob', age: 25})").unwrap();
+        g.execute("CREATE (:Person {name: 'Alice', age: 30})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: 'Bob', age: 25})")
+            .unwrap();
 
         let result = g
             .execute("MATCH (n:Person {age: 99}) RETURN n.name")
@@ -2639,28 +2675,45 @@ mod tests {
     #[test]
     fn test_relationship_pattern_property_with_variable() {
         let mut g = Graph::new();
-        g.execute("CREATE (:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(:Person {name: 'Bob'})").unwrap();
-        g.execute("CREATE (:Person {name: 'Alice'})-[:KNOWS {since: 2022}]->(:Person {name: 'Carol'})").unwrap();
+        g.execute(
+            "CREATE (:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(:Person {name: 'Bob'})",
+        )
+        .unwrap();
+        g.execute(
+            "CREATE (:Person {name: 'Alice'})-[:KNOWS {since: 2022}]->(:Person {name: 'Carol'})",
+        )
+        .unwrap();
 
         let result = g
             .execute("MATCH (a:Person {name: 'Alice'})-[r:KNOWS {since: 2020}]->(b) RETURN b.name")
             .unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("Bob".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Bob".to_string())
+        );
     }
 
     #[test]
     fn test_relationship_pattern_property_anonymous() {
         let mut g = Graph::new();
-        g.execute("CREATE (:A {name: 'x'})-[:R {weight: 1}]->(:B {name: 'y'})").unwrap();
-        g.execute("CREATE (:A {name: 'p'})-[:R {weight: 5}]->(:B {name: 'q'})").unwrap();
+        g.execute("CREATE (:A {name: 'x'})-[:R {weight: 1}]->(:B {name: 'y'})")
+            .unwrap();
+        g.execute("CREATE (:A {name: 'p'})-[:R {weight: 5}]->(:B {name: 'q'})")
+            .unwrap();
 
         let result = g
             .execute("MATCH (a:A)-[:R {weight: 5}]->(b:B) RETURN a.name, b.name")
             .unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].values[0], CypherValue::String("p".to_string()));
-        assert_eq!(result.rows[0].values[1], CypherValue::String("q".to_string()));
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("p".to_string())
+        );
+        assert_eq!(
+            result.rows[0].values[1],
+            CypherValue::String("q".to_string())
+        );
     }
 
     #[test]
