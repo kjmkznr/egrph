@@ -1318,15 +1318,366 @@ fn execute_merge<S: StorageBackend>(
 
             Ok((cols, result_records))
         }
-        PatternElement::Chain { .. } => {
-            // MERGE on path patterns requires matching/creating the entire path atomically,
-            // which is not yet implemented. Return a clear error rather than silently
-            // producing wrong results.
-            Err(CypherError::NotImplemented(
-                "MERGE with relationship chain patterns is not yet supported; use MERGE on nodes only".to_string(),
-            ))
+        PatternElement::Chain { start, elements } => execute_merge_chain(
+            cols,
+            input_records,
+            start,
+            elements,
+            on_create,
+            on_match,
+            storage,
+            params,
+        ),
+    }
+}
+
+/// MERGE on a relationship chain pattern.
+///
+/// For each incoming record, attempt to match the full chain against existing
+/// graph state. If the whole chain matches, emit one row per matching path and
+/// apply `ON MATCH SET`. If any step fails to match, emit a single row in
+/// which every node/edge not already bound in the input record is created
+/// (nodes/edges that *are* already bound are reused), then apply
+/// `ON CREATE SET`.
+///
+/// Semantics decisions:
+/// - `ON CREATE SET` fires only on the create branch; `ON MATCH SET` only on
+///   the match branch. Both apply every item to the emitted row(s).
+/// - Inline labels / properties attached to a variable that is already bound
+///   in the input record act as additional equality filters in the match
+///   branch (spec-compliant).
+#[allow(clippy::too_many_arguments)]
+fn execute_merge_chain<S: StorageBackend>(
+    mut cols: Vec<String>,
+    input_records: Vec<Record>,
+    start: &NodePattern,
+    elements: &[PatternChainElement],
+    on_create: Option<&[SetItem]>,
+    on_match: Option<&[SetItem]>,
+    storage: &mut S,
+    params: &Parameters,
+) -> Result<(Vec<String>, Vec<Record>), CypherError> {
+    // Collect all variable names the chain binds.
+    if let Some(v) = &start.variable
+        && !cols.contains(v)
+    {
+        cols.push(v.clone());
+    }
+    for elem in elements {
+        if let Some(rv) = &elem.relationship.variable
+            && !cols.contains(rv)
+        {
+            cols.push(rv.clone());
+        }
+        if let Some(dv) = &elem.node.variable
+            && !cols.contains(dv)
+        {
+            cols.push(dv.clone());
         }
     }
+
+    let base_records = if input_records.is_empty() {
+        vec![Record::new()]
+    } else {
+        input_records
+    };
+
+    let mut result_records: Vec<Record> = Vec::new();
+
+    for rec in base_records {
+        // Seed candidate walks from the start node.
+        let start_candidates: Vec<(Record, NodeId)> =
+            seed_merge_candidates(&rec, start, storage, params)?;
+
+        // Walk each chain element, expanding candidates as we go.
+        let mut candidates = start_candidates;
+        for elem in elements {
+            if candidates.is_empty() {
+                break;
+            }
+            let mut next: Vec<(Record, NodeId)> = Vec::new();
+            for (cand_rec, prev_id) in &candidates {
+                expand_merge_candidate(cand_rec, *prev_id, elem, &mut next, storage, params)?;
+            }
+            candidates = next;
+        }
+
+        if !candidates.is_empty() {
+            // Match branch: emit one row per successful walk and run ON MATCH.
+            let mut branch: Vec<Record> = candidates.into_iter().map(|(r, _)| r).collect();
+            if let Some(items) = on_match {
+                for r in &mut branch {
+                    for item in items {
+                        apply_set_item(item, r, storage, params)?;
+                    }
+                }
+            }
+            result_records.extend(branch);
+        } else {
+            // Create branch: create every not-yet-bound node/edge, emit one row.
+            let created = create_merge_chain_row(rec, start, elements, storage, params)?;
+            let mut branch = vec![created];
+            if let Some(items) = on_create {
+                for r in &mut branch {
+                    for item in items {
+                        apply_set_item(item, r, storage, params)?;
+                    }
+                }
+            }
+            result_records.extend(branch);
+        }
+    }
+
+    Ok((cols, result_records))
+}
+
+/// Produce the initial candidate set for a MERGE chain walk.
+///
+/// If `start.variable` is already bound in `rec`, reuse that node (subject to
+/// any inline label/property filters in the pattern). Otherwise look up
+/// candidate start nodes in storage.
+fn seed_merge_candidates<S: StorageBackend>(
+    rec: &Record,
+    start: &NodePattern,
+    storage: &S,
+    params: &Parameters,
+) -> Result<Vec<(Record, NodeId)>, CypherError> {
+    let inline_props = resolve_map_literal_to_properties(&start.properties, rec, params, storage)?;
+
+    if let Some(var) = &start.variable
+        && let Some(CypherValue::Node(n)) = rec.get(var)
+    {
+        // Already bound — treat labels/props as additional filters.
+        if !node_matches_filters(n, &start.labels, &inline_props) {
+            return Ok(Vec::new());
+        }
+        return Ok(vec![(rec.clone(), n.id)]);
+    }
+
+    let ids = storage.find_nodes(&start.labels, &inline_props);
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let node = match storage.get_node(id) {
+            Some(n) => n,
+            None => continue,
+        };
+        let mut r = rec.clone();
+        if let Some(var) = &start.variable {
+            r.insert(var.clone(), CypherValue::Node(node));
+        }
+        out.push((r, id));
+    }
+    Ok(out)
+}
+
+/// Expand one chain element for a single candidate, pushing surviving
+/// extensions into `next`.
+fn expand_merge_candidate<S: StorageBackend>(
+    cand_rec: &Record,
+    prev_id: NodeId,
+    elem: &PatternChainElement,
+    next: &mut Vec<(Record, NodeId)>,
+    storage: &S,
+    params: &Parameters,
+) -> Result<(), CypherError> {
+    let rel_types = &elem.relationship.rel_types;
+    let rel_props = resolve_map_literal_to_properties(
+        &elem.relationship.properties,
+        cand_rec,
+        params,
+        storage,
+    )?;
+    let node_props =
+        resolve_map_literal_to_properties(&elem.node.properties, cand_rec, params, storage)?;
+    let node_labels = &elem.node.labels;
+
+    // If the destination variable is already bound in this candidate, require
+    // the other endpoint to equal the bound node's id.
+    let bound_dst: Option<NodeId> = elem
+        .node
+        .variable
+        .as_ref()
+        .and_then(|dv| cand_rec.get(dv))
+        .and_then(|v| match v {
+            CypherValue::Node(n) => Some(n.id),
+            _ => None,
+        });
+
+    let edges = match elem.relationship.direction {
+        Direction::Outgoing => storage.outgoing_edges(prev_id),
+        Direction::Incoming => storage.incoming_edges(prev_id),
+        Direction::Undirected => {
+            let mut all = storage.outgoing_edges(prev_id);
+            all.extend(storage.incoming_edges(prev_id));
+            all
+        }
+    };
+
+    for edge in edges {
+        if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
+            continue;
+        }
+        if !properties_match(&edge.properties, &rel_props) {
+            continue;
+        }
+        let other_id = match elem.relationship.direction {
+            Direction::Outgoing => edge.dst,
+            Direction::Incoming => edge.src,
+            Direction::Undirected => {
+                if edge.src == prev_id {
+                    edge.dst
+                } else {
+                    edge.src
+                }
+            }
+        };
+        if let Some(bid) = bound_dst
+            && bid != other_id
+        {
+            continue;
+        }
+        let dst_node = match storage.get_node(other_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !node_matches_filters(&dst_node, node_labels, &node_props) {
+            continue;
+        }
+        let mut new_rec = cand_rec.clone();
+        if let Some(rv) = &elem.relationship.variable {
+            new_rec.insert(rv.clone(), CypherValue::Relationship(edge));
+        }
+        if let Some(dv) = &elem.node.variable {
+            new_rec.insert(dv.clone(), CypherValue::Node(dst_node));
+        }
+        next.push((new_rec, other_id));
+    }
+    Ok(())
+}
+
+/// Create every not-yet-bound node/edge in the chain against the given input
+/// record. Mirrors `execute_create_path_from_records`'s per-record body,
+/// but always emits exactly one row (the caller handles ON CREATE SET).
+fn create_merge_chain_row<S: StorageBackend>(
+    mut rec: Record,
+    start: &NodePattern,
+    elements: &[PatternChainElement],
+    storage: &mut S,
+    params: &Parameters,
+) -> Result<Record, CypherError> {
+    let start_id = if let Some(v) = &start.variable {
+        if let Some(CypherValue::Node(n)) = rec.get(v) {
+            n.id
+        } else {
+            let labels = start.labels.clone();
+            let props =
+                resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
+            let id = storage.create_node(labels, props);
+            let node = storage
+                .get_node(id)
+                .ok_or_else(|| {
+                    CypherError::RuntimeError("Newly created node not found".to_string())
+                })?
+                .clone();
+            rec.insert(v.clone(), CypherValue::Node(node));
+            id
+        }
+    } else {
+        let labels = start.labels.clone();
+        let props = resolve_map_literal_to_properties(&start.properties, &rec, params, storage)?;
+        storage.create_node(labels, props)
+    };
+
+    let mut prev_id = start_id;
+    for elem in elements {
+        let dst_id = if let Some(dv) = &elem.node.variable {
+            if let Some(CypherValue::Node(n)) = rec.get(dv) {
+                n.id
+            } else {
+                let labels = elem.node.labels.clone();
+                let props = resolve_map_literal_to_properties(
+                    &elem.node.properties,
+                    &rec,
+                    params,
+                    storage,
+                )?;
+                let id = storage.create_node(labels, props);
+                let node = storage
+                    .get_node(id)
+                    .ok_or_else(|| {
+                        CypherError::RuntimeError("Newly created node not found".to_string())
+                    })?
+                    .clone();
+                rec.insert(dv.clone(), CypherValue::Node(node));
+                id
+            }
+        } else {
+            let labels = elem.node.labels.clone();
+            let props =
+                resolve_map_literal_to_properties(&elem.node.properties, &rec, params, storage)?;
+            storage.create_node(labels, props)
+        };
+
+        let edge_label = elem
+            .relationship
+            .rel_types
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let edge_props = resolve_map_literal_to_properties(
+            &elem.relationship.properties,
+            &rec,
+            params,
+            storage,
+        )?;
+        let (src, dst) = match elem.relationship.direction {
+            Direction::Incoming => (dst_id, prev_id),
+            _ => (prev_id, dst_id),
+        };
+        let eid = storage
+            .create_edge(edge_label, src, dst, edge_props)
+            .map_err(CypherError::RuntimeError)?;
+
+        if let Some(rv) = &elem.relationship.variable {
+            let edge = storage
+                .get_edge(eid)
+                .ok_or_else(|| {
+                    CypherError::RuntimeError("Newly created edge not found".to_string())
+                })?
+                .clone();
+            rec.insert(rv.clone(), CypherValue::Relationship(edge));
+        }
+
+        prev_id = dst_id;
+    }
+
+    Ok(rec)
+}
+
+/// Return true if `node` carries every label in `required_labels` and every
+/// property in `required_props` matches by value.
+fn node_matches_filters(
+    node: &Node,
+    required_labels: &[String],
+    required_props: &HashMap<String, PropertyValue>,
+) -> bool {
+    if !required_labels
+        .iter()
+        .all(|l| node.labels.iter().any(|nl| nl == l))
+    {
+        return false;
+    }
+    properties_match(&node.properties, required_props)
+}
+
+/// Return true if `actual` contains every (key, value) pair in `required`.
+fn properties_match(
+    actual: &HashMap<String, PropertyValue>,
+    required: &HashMap<String, PropertyValue>,
+) -> bool {
+    required
+        .iter()
+        .all(|(k, v)| actual.get(k).map(|av| av == v).unwrap_or(false))
 }
 
 /// Walk a chain-encoded path backwards and return true if `edge` is already on it.
