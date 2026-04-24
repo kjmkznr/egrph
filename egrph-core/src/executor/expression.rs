@@ -1259,6 +1259,22 @@ fn eval_function(
         "pi" => CypherValue::Float(std::f64::consts::PI),
         "e" => CypherValue::Float(std::f64::consts::E),
         "rand" => CypherValue::Float(pseudo_rand()),
+        "randomuuid" => {
+            let mut hi = pseudo_rand_u64();
+            let mut lo = pseudo_rand_u64();
+            // Set version 4 (bits 15-12 of the low 16 bits of hi)
+            hi = (hi & 0xFFFF_FFFF_FFFF_0FFF) | 0x0000_0000_0000_4000;
+            // Set variant 1 (top 2 bits of lo: 10xx...)
+            lo = (lo & 0x3FFF_FFFF_FFFF_FFFF) | 0x8000_0000_0000_0000;
+            CypherValue::String(format!(
+                "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                (hi >> 32) as u32,
+                ((hi >> 16) & 0xFFFF) as u16,
+                (hi & 0xFFFF) as u16,
+                (lo >> 48) as u16,
+                lo & 0x0000_FFFF_FFFF_FFFF,
+            ))
+        }
         // List functions
         "head" => {
             if let Some(arg) = args.first() {
@@ -1554,6 +1570,29 @@ fn math_fn_1(
     } else {
         Ok(CypherValue::Null)
     }
+}
+
+/// Returns a pseudo-random u64 using a thread-local xorshift state.
+fn pseudo_rand_u64() -> u64 {
+    use std::cell::Cell;
+    use std::time::SystemTime;
+    thread_local! {
+        static STATE: Cell<u64> = Cell::new({
+            let t = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+            if t == 0 { 0xCAFE_BABE_DEAD_BEEF } else { t ^ 0xA5A5_A5A5_A5A5_A5A5 }
+        });
+    }
+    STATE.with(|s| {
+        let mut x = s.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        x
+    })
 }
 
 /// Pseudo-random number generator using a thread-local xorshift state.

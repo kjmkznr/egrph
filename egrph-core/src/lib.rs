@@ -2785,4 +2785,38 @@ mod tests {
             err
         );
     }
+
+    #[test]
+    fn test_randomuuid_returns_string() {
+        let mut g = Graph::new();
+        let result = g.execute("RETURN randomUUID() AS uuid").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::String(s) => {
+                // UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+                let parts: Vec<&str> = s.split('-').collect();
+                assert_eq!(parts.len(), 5);
+                assert_eq!(parts[0].len(), 8);
+                assert_eq!(parts[1].len(), 4);
+                assert_eq!(parts[2].len(), 4);
+                assert_eq!(parts[3].len(), 4);
+                assert_eq!(parts[4].len(), 12);
+                // Version 4
+                assert_eq!(&parts[2][0..1], "4");
+                // Variant 1 (8, 9, a, or b)
+                assert!(matches!(&parts[3][0..1], "8" | "9" | "a" | "b"));
+            }
+            other => panic!("expected String, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_randomuuid_unique() {
+        let mut g = Graph::new();
+        let result = g
+            .execute("RETURN randomUUID() AS u1, randomUUID() AS u2")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_ne!(result.rows[0].values[0], result.rows[0].values[1]);
+    }
 }
