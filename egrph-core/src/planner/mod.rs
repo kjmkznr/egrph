@@ -185,7 +185,15 @@ fn plan_match_scan(
 
             // Chain expansions for each relationship + target node
             for (i, chain_elem) in elements.iter().enumerate() {
-                let rel_var = chain_elem.relationship.variable.clone();
+                // If the relationship has inline properties but no explicit variable,
+                // assign an anonymous variable so the filter can reference the edge.
+                let effective_rel_var = chain_elem.relationship.variable.clone().or_else(|| {
+                    if chain_elem.relationship.properties.is_some() {
+                        Some(format!("__egrph_anon_rel_{}__", i))
+                    } else {
+                        None
+                    }
+                });
                 let dst_var = chain_elem
                     .node
                     .variable
@@ -209,7 +217,7 @@ fn plan_match_scan(
                     current = LogicalPlan::VarLengthExpand {
                         input: Box::new(current),
                         src_variable: src_var,
-                        rel_variable: rel_var,
+                        rel_variable: effective_rel_var.clone(),
                         dst_variable: dst_var.clone(),
                         rel_types: chain_elem.relationship.rel_types.clone(),
                         direction: chain_elem.relationship.direction.clone(),
@@ -220,11 +228,20 @@ fn plan_match_scan(
                     current = LogicalPlan::Expand {
                         input: Box::new(current),
                         src_variable: src_var,
-                        rel_variable: rel_var,
+                        rel_variable: effective_rel_var.clone(),
                         dst_variable: dst_var.clone(),
                         rel_types: chain_elem.relationship.rel_types.clone(),
                         direction: chain_elem.relationship.direction.clone(),
                     };
+                }
+
+                // Add property filters for the relationship
+                if let Some(rel_name) = &effective_rel_var {
+                    current = add_property_filters(
+                        current,
+                        rel_name,
+                        &chain_elem.relationship.properties,
+                    );
                 }
 
                 // If the target node has label filters, add a filter for each label
