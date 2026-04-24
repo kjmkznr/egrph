@@ -366,6 +366,46 @@ mod tests {
     }
 
     #[test]
+    fn test_match_multiple_relationship_types_or() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\"})-[:KNOWS]->(:Person {name: \"Bob\"})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Charlie\"})-[:LIKES]->(:Person {name: \"Dave\"})")
+            .unwrap();
+        g.execute("CREATE (:Person {name: \"Eve\"})-[:HATES]->(:Person {name: \"Frank\"})")
+            .unwrap();
+
+        // KNOWS|LIKES should match Alice->Bob and Charlie->Dave, but not Eve->Frank
+        let result = g
+            .execute("MATCH (a:Person)-[:KNOWS|LIKES]->(b:Person) RETURN a.name ORDER BY a.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0].values[0], CypherValue::String("Alice".to_string()));
+        assert_eq!(result.rows[1].values[0], CypherValue::String("Charlie".to_string()));
+
+        // Single type still works
+        let result2 = g
+            .execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name")
+            .unwrap();
+        assert_eq!(result2.rows.len(), 1);
+        assert_eq!(result2.rows[0].values[0], CypherValue::String("Alice".to_string()));
+
+        // Three types
+        let result3 = g
+            .execute("MATCH (a:Person)-[:KNOWS|LIKES|HATES]->(b:Person) RETURN a.name ORDER BY a.name")
+            .unwrap();
+        assert_eq!(result3.rows.len(), 3);
+
+        // Relationship variable with multiple types
+        let result4 = g
+            .execute("MATCH (a:Person)-[r:KNOWS|LIKES]->(b:Person) RETURN type(r) ORDER BY type(r)")
+            .unwrap();
+        assert_eq!(result4.rows.len(), 2);
+        assert_eq!(result4.rows[0].values[0], CypherValue::String("KNOWS".to_string()));
+        assert_eq!(result4.rows[1].values[0], CypherValue::String("LIKES".to_string()));
+    }
+
+    #[test]
     fn test_return_with_alias() {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
