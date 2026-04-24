@@ -1126,6 +1126,169 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_chain_creates_new_path() {
+        let mut g = Graph::new();
+        g.execute("MERGE (a:Person {name: \"A\"})-[:KNOWS]->(b:Person {name: \"B\"})")
+            .unwrap();
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+
+        let result = g
+            .execute("MATCH (a:Person {name: \"A\"})-[r:KNOWS]->(b:Person {name: \"B\"}) RETURN r")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_chain_matches_existing_path() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"A\"})-[:KNOWS]->(:Person {name: \"B\"})")
+            .unwrap();
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+
+        g.execute("MERGE (a:Person {name: \"A\"})-[:KNOWS]->(b:Person {name: \"B\"})")
+            .unwrap();
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_merge_chain_reuses_bound_start() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"A\"})").unwrap();
+        g.execute("CREATE (:Person {name: \"A\"})").unwrap();
+        assert_eq!(g.node_count(), 2);
+
+        g.execute("MATCH (a:Person {name: \"A\"}) MERGE (a)-[:KNOWS]->(b:Person {name: \"B\"})")
+            .unwrap();
+
+        // Two A nodes, each gets a new B and a new edge.
+        assert_eq!(g.node_count(), 4);
+        assert_eq!(g.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_merge_chain_reuses_bound_endpoints_creates_edge() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"A\"})").unwrap();
+        g.execute("CREATE (:Person {name: \"B\"})").unwrap();
+        assert_eq!(g.edge_count(), 0);
+
+        g.execute(
+            "MATCH (a:Person {name: \"A\"}), (b:Person {name: \"B\"}) MERGE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_merge_chain_reuses_bound_endpoints_no_duplicate() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"A\"})-[:KNOWS]->(:Person {name: \"B\"})")
+            .unwrap();
+        assert_eq!(g.edge_count(), 1);
+
+        g.execute(
+            "MATCH (a:Person {name: \"A\"}), (b:Person {name: \"B\"}) MERGE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_merge_chain_on_create_only_fires_on_create() {
+        let mut g = Graph::new();
+        g.execute(
+            "MERGE (a:Person {name: \"A\"})-[r:KNOWS]->(b:Person {name: \"B\"}) \
+             ON CREATE SET r.w = 1 ON MATCH SET r.w = 999",
+        )
+        .unwrap();
+
+        let result = g
+            .execute("MATCH (:Person {name: \"A\"})-[r:KNOWS]->(:Person {name: \"B\"}) RETURN r.w")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Integer(i) => assert_eq!(*i, 1),
+            other => panic!("Expected Integer(1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_merge_chain_on_match_only_fires_on_match() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"A\"})-[:KNOWS]->(:Person {name: \"B\"})")
+            .unwrap();
+
+        g.execute(
+            "MERGE (a:Person {name: \"A\"})-[r:KNOWS]->(b:Person {name: \"B\"}) \
+             ON CREATE SET r.w = 1 ON MATCH SET r.w = 999",
+        )
+        .unwrap();
+
+        assert_eq!(g.edge_count(), 1);
+        let result = g
+            .execute("MATCH (:Person {name: \"A\"})-[r:KNOWS]->(:Person {name: \"B\"}) RETURN r.w")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Integer(i) => assert_eq!(*i, 999),
+            other => panic!("Expected Integer(999), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_merge_chain_respects_direction() {
+        let mut g = Graph::new();
+        // Seed an edge going the wrong way: B -> A
+        g.execute("CREATE (:Person {name: \"A\"})<-[:KNOWS]-(:Person {name: \"B\"})")
+            .unwrap();
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.edge_count(), 1);
+
+        // MERGE requires A -> B; the full path doesn't exist, so per
+        // openCypher semantics the entire pattern is created — fresh A, fresh
+        // B, fresh edge.
+        g.execute("MERGE (:Person {name: \"A\"})-[:KNOWS]->(:Person {name: \"B\"})")
+            .unwrap();
+
+        assert_eq!(g.node_count(), 4);
+        assert_eq!(g.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_merge_chain_multiple_matches_yield_multiple_rows() {
+        let mut g = Graph::new();
+        g.execute("CREATE (a:A)-[:R]->(:B), (a)-[:R]->(:B)")
+            .unwrap();
+        assert_eq!(g.node_count(), 3);
+        assert_eq!(g.edge_count(), 2);
+
+        let result = g
+            .execute("MATCH (a:A) MERGE (a)-[:R]->(b:B) RETURN b")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(g.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_merge_chain_rel_inline_property_filter() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:A)-[:R {w: 1}]->(:B)").unwrap();
+        assert_eq!(g.edge_count(), 1);
+
+        // Existing edge has w:1; MERGE asks for w:2 so it must create a new path.
+        g.execute("MERGE (:A)-[:R {w: 2}]->(:B)").unwrap();
+        assert_eq!(g.node_count(), 4);
+        assert_eq!(g.edge_count(), 2);
+    }
+
+    #[test]
     fn test_delete_relationship() {
         let mut g = Graph::new();
         g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
