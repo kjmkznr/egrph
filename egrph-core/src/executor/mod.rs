@@ -1976,9 +1976,12 @@ fn resolve_map_literal_to_properties<S: StorageBackend>(
     let mut properties = HashMap::new();
     if let Some(map) = map_lit {
         for (key, expr) in &map.entries {
+            let MapKey::Identifier(key_str) = key else {
+                continue;
+            };
             let val = eval_with_params(expr, record, params, storage)?;
             let prop = cypher_value_to_property(&val)?;
-            properties.insert(key.clone(), prop);
+            properties.insert(key_str.clone(), prop);
         }
     }
     Ok(properties)

@@ -230,8 +230,16 @@ pub struct RangeSpec {
 }
 
 #[derive(Debug, Clone)]
+pub enum MapKey {
+    /// Static identifier key, e.g. `{name: 1}`
+    Identifier(String),
+    /// Dynamic key expression, e.g. `{"x": 1}` or `{$k: 1}`
+    Expression(Box<Expression>),
+}
+
+#[derive(Debug, Clone)]
 pub struct MapLiteral {
-    pub entries: Vec<(String, Expression)>,
+    pub entries: Vec<(MapKey, Expression)>,
 }
 
 #[derive(Debug, Clone)]

@@ -252,7 +252,8 @@ boolean = @{ (^"true" | ^"false") ~ !ASCII_ALPHANUMERIC }
 null_literal = @{ ^"NULL" ~ !ASCII_ALPHANUMERIC }
 list_literal = { "[" ~ expression_list? ~ "]" }
 map_literal = { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
-map_entry = { property_key ~ ":" ~ expression }
+map_entry = { map_entry_key ~ ":" ~ expression }
+map_entry_key = { string | parameter | property_key }
 
 // --- Identifiers ---
 variable = { IDENTIFIER }

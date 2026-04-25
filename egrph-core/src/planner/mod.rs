@@ -277,7 +277,14 @@ fn plan_match_scan(
 // so they can be embedded directly in a `ScanNodes` plan node for index lookup.
 fn inline_props_from_pattern(properties: &Option<MapLiteral>) -> Vec<(String, Expression)> {
     match properties {
-        Some(map) => map.entries.clone(),
+        Some(map) => map
+            .entries
+            .iter()
+            .filter_map(|(k, v)| match k {
+                MapKey::Identifier(s) => Some((s.clone(), v.clone())),
+                MapKey::Expression(_) => None,
+            })
+            .collect(),
         None => Vec::new(),
     }
 }
@@ -293,12 +300,15 @@ fn add_property_filters(
     };
     let mut current = input;
     for (key, val_expr) in &map.entries {
+        let MapKey::Identifier(key_str) = key else {
+            continue;
+        };
         current = LogicalPlan::Filter {
             input: Box::new(current),
             predicate: Expression::Comparison {
                 left: Box::new(Expression::Property(
                     Box::new(Expression::Variable(variable.to_string())),
-                    key.clone(),
+                    key_str.clone(),
                 )),
                 op: CompOp::Eq,
                 right: Box::new(val_expr.clone()),

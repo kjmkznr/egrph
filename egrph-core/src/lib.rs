@@ -3231,4 +3231,38 @@ mod tests {
         assert!(ids.contains(&2));
         assert!(ids.contains(&3));
     }
+
+    #[test]
+    fn test_map_string_literal_key() {
+        // {"x": 1} should create a map with key "x"
+        let mut g = Graph::new();
+        let result = g.execute(r#"RETURN {"name": "Alice", "age": 30}"#).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Map(m) => {
+                assert_eq!(
+                    m.get("name"),
+                    Some(&CypherValue::String("Alice".to_string()))
+                );
+                assert_eq!(m.get("age"), Some(&CypherValue::Integer(30)));
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_dynamic_key_from_parameter() {
+        // {$k: 1} should create a map where key is the value of parameter k
+        let mut g = Graph::new();
+        let mut params = HashMap::new();
+        params.insert("k".to_string(), CypherValue::String("score".to_string()));
+        let result = g.execute_with_params(r#"RETURN {$k: 42}"#, params).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Map(m) => {
+                assert_eq!(m.get("score"), Some(&CypherValue::Integer(42)));
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
 }

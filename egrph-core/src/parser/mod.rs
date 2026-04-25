@@ -919,7 +919,7 @@ fn parse_properties(pair: pest::iterators::Pair<Rule>) -> Result<MapLiteral, Cyp
                         }
                     }
                     if let Some(v) = val {
-                        entries.push((key, v));
+                        entries.push((MapKey::Identifier(key), v));
                     }
                 }
             }
@@ -1692,17 +1692,44 @@ fn parse_literal(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Cypher
             let mut entries = Vec::new();
             for map_inner in inner.into_inner() {
                 if map_inner.as_rule() == Rule::map_entry {
-                    let mut key = String::new();
+                    let mut map_key: Option<MapKey> = None;
                     let mut val = None;
                     for p in map_inner.into_inner() {
                         match p.as_rule() {
-                            Rule::property_key => key = p.as_str().to_string(),
+                            Rule::map_entry_key => {
+                                let key_inner = p.into_inner().next().ok_or_else(|| {
+                                    CypherError::ParseError("Empty map key".to_string())
+                                })?;
+                                map_key = Some(match key_inner.as_rule() {
+                                    Rule::property_key => {
+                                        MapKey::Identifier(key_inner.as_str().to_string())
+                                    }
+                                    Rule::string => {
+                                        let raw = key_inner.as_str();
+                                        let unquoted = parse_string_content(raw)?;
+                                        MapKey::Expression(Box::new(Expression::Literal(
+                                            Literal::String(unquoted),
+                                        )))
+                                    }
+                                    Rule::parameter => {
+                                        let fallback =
+                                            key_inner.as_str().trim_start_matches('$').to_string();
+                                        let name = key_inner
+                                            .into_inner()
+                                            .next()
+                                            .map(|p| p.as_str().to_string())
+                                            .unwrap_or(fallback);
+                                        MapKey::Expression(Box::new(Expression::Parameter(name)))
+                                    }
+                                    _ => MapKey::Identifier(key_inner.as_str().to_string()),
+                                });
+                            }
                             Rule::expression => val = Some(parse_expression(p)?),
                             _ => {}
                         }
                     }
-                    if let Some(v) = val {
-                        entries.push((key, v));
+                    if let (Some(k), Some(v)) = (map_key, val) {
+                        entries.push((k, v));
                     }
                 }
             }

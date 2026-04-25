@@ -315,7 +315,21 @@ fn eval_literal(
         Literal::Map(map_lit) => {
             let mut entries = HashMap::new();
             for (k, v) in &map_lit.entries {
-                entries.insert(k.clone(), eval_with_params(v, record, params, storage)?);
+                let key_str = match k {
+                    MapKey::Identifier(s) => s.clone(),
+                    MapKey::Expression(key_expr) => {
+                        match eval_with_params(key_expr, record, params, storage)? {
+                            CypherValue::String(s) => s,
+                            other => {
+                                return Err(CypherError::TypeError(format!(
+                                    "Map key must be a string, got: {:?}",
+                                    other
+                                )));
+                            }
+                        }
+                    }
+                };
+                entries.insert(key_str, eval_with_params(v, record, params, storage)?);
             }
             CypherValue::Map(entries)
         }
@@ -1848,10 +1862,13 @@ fn exists_node_matches(
     }
     if let Some(map) = &np.properties {
         for (k, expr) in &map.entries {
+            let MapKey::Identifier(k_str) = k else {
+                continue;
+            };
             let expected = eval_with_params(expr, record, params, storage)?;
             let actual = node
                 .properties
-                .get(k)
+                .get(k_str)
                 .map(property_value_to_cypher)
                 .unwrap_or(CypherValue::Null);
             if !exists_values_equal(&actual, &expected) {
@@ -1871,10 +1888,13 @@ fn exists_rel_properties_match(
 ) -> Result<bool, CypherError> {
     let Some(map) = props else { return Ok(true) };
     for (k, expr) in &map.entries {
+        let MapKey::Identifier(k_str) = k else {
+            continue;
+        };
         let expected = eval_with_params(expr, record, params, storage)?;
         let actual = edge
             .properties
-            .get(k)
+            .get(k_str)
             .map(property_value_to_cypher)
             .unwrap_or(CypherValue::Null);
         if !exists_values_equal(&actual, &expected) {
