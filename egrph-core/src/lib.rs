@@ -14,7 +14,7 @@ pub use graph::storage::MemoryStorage;
 pub use graph::types::{CypherValue, Edge, EdgeId, Node, NodeId, Path, PropertyValue};
 
 /// Default in-memory graph (backward-compatible alias).
-pub type InMemoryGraph = graph::Graph<MemoryStorage>;
+pub type InMemoryGraph = Graph<MemoryStorage>;
 
 #[cfg(feature = "sled-storage")]
 pub use graph::sled_storage::SledStorage;
