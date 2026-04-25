@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "egrph-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "bincode",
  "csv",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "egrph-wasm"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "console_error_panic_hook",
  "egrph-core",
