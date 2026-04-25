@@ -229,6 +229,78 @@ mod tests {
     }
 
     #[test]
+    fn test_order_by_multiple_keys() {
+        let mut g = Graph::new();
+        // Two nodes with cat "A", scores 3 and 1
+        // Two nodes with cat "B", scores 2 and 4
+        g.execute("CREATE (:P {cat: \"A\", score: 3})").unwrap();
+        g.execute("CREATE (:P {cat: \"A\", score: 1})").unwrap();
+        g.execute("CREATE (:P {cat: \"B\", score: 2})").unwrap();
+        g.execute("CREATE (:P {cat: \"B\", score: 4})").unwrap();
+
+        // ORDER BY cat ASC, score DESC → A/3, A/1, B/4, B/2
+        let result = g
+            .execute("MATCH (n:P) RETURN n.cat, n.score ORDER BY n.cat ASC, n.score DESC")
+            .unwrap();
+        assert_eq!(result.rows.len(), 4);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("A".to_string())
+        );
+        assert_eq!(result.rows[0].values[1], CypherValue::Integer(3));
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("A".to_string())
+        );
+        assert_eq!(result.rows[1].values[1], CypherValue::Integer(1));
+        assert_eq!(
+            result.rows[2].values[0],
+            CypherValue::String("B".to_string())
+        );
+        assert_eq!(result.rows[2].values[1], CypherValue::Integer(4));
+        assert_eq!(
+            result.rows[3].values[0],
+            CypherValue::String("B".to_string())
+        );
+        assert_eq!(result.rows[3].values[1], CypherValue::Integer(2));
+    }
+
+    #[test]
+    fn test_order_by_multiple_keys_desc_asc() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:P {cat: \"A\", score: 3})").unwrap();
+        g.execute("CREATE (:P {cat: \"A\", score: 1})").unwrap();
+        g.execute("CREATE (:P {cat: \"B\", score: 2})").unwrap();
+        g.execute("CREATE (:P {cat: \"B\", score: 4})").unwrap();
+
+        // ORDER BY cat DESC, score ASC → B/2, B/4, A/1, A/3
+        let result = g
+            .execute("MATCH (n:P) RETURN n.cat, n.score ORDER BY n.cat DESC, n.score ASC")
+            .unwrap();
+        assert_eq!(result.rows.len(), 4);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("B".to_string())
+        );
+        assert_eq!(result.rows[0].values[1], CypherValue::Integer(2));
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("B".to_string())
+        );
+        assert_eq!(result.rows[1].values[1], CypherValue::Integer(4));
+        assert_eq!(
+            result.rows[2].values[0],
+            CypherValue::String("A".to_string())
+        );
+        assert_eq!(result.rows[2].values[1], CypherValue::Integer(1));
+        assert_eq!(
+            result.rows[3].values[0],
+            CypherValue::String("A".to_string())
+        );
+        assert_eq!(result.rows[3].values[1], CypherValue::Integer(3));
+    }
+
+    #[test]
     fn test_skip() {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
