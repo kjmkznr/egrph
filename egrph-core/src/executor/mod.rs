@@ -624,13 +624,49 @@ fn execute_to_records<S: StorageBackend>(
 
         LogicalPlan::CreateConstraint {
             label,
-            property,
+            properties,
             constraint_type,
         } => {
             match constraint_type {
                 ConstraintType::Unique => {
+                    let property = properties.first().ok_or_else(|| {
+                        CypherError::SemanticError(
+                            "UNIQUE constraint requires a property".to_string(),
+                        )
+                    })?;
                     storage
                         .add_unique_constraint(label, property)
+                        .map_err(CypherError::ConstraintError)?;
+                }
+                ConstraintType::NotNull => {
+                    let property = properties.first().ok_or_else(|| {
+                        CypherError::SemanticError(
+                            "NOT NULL constraint requires a property".to_string(),
+                        )
+                    })?;
+                    storage
+                        .add_not_null_constraint(label, property)
+                        .map_err(CypherError::ConstraintError)?;
+                }
+                ConstraintType::NodeKey => {
+                    storage
+                        .add_node_key_constraint(label, properties)
+                        .map_err(CypherError::ConstraintError)?;
+                }
+                ConstraintType::PropertyType(kind) => {
+                    let property = properties.first().ok_or_else(|| {
+                        CypherError::SemanticError(
+                            "PROPERTY TYPE constraint requires a property".to_string(),
+                        )
+                    })?;
+                    let type_name = match kind {
+                        PropertyTypeKind::Boolean => "BOOLEAN",
+                        PropertyTypeKind::String => "STRING",
+                        PropertyTypeKind::Integer => "INTEGER",
+                        PropertyTypeKind::Float => "FLOAT",
+                    };
+                    storage
+                        .add_property_type_constraint(label, property, type_name)
                         .map_err(CypherError::ConstraintError)?;
                 }
             }
@@ -745,7 +781,7 @@ fn execute_create_node_from_records<S: StorageBackend>(
         let labels = pattern.labels.clone();
         let properties =
             resolve_map_literal_to_properties(&pattern.properties, &rec, params, storage)?;
-        // Check unique constraints before creating the node
+        // Check all constraints before creating the node
         for label in &labels {
             for (prop_key, prop_val) in &properties {
                 storage
@@ -753,6 +789,15 @@ fn execute_create_node_from_records<S: StorageBackend>(
                     .map_err(CypherError::ConstraintError)?;
             }
         }
+        storage
+            .check_not_null_constraints(&labels, &properties)
+            .map_err(CypherError::ConstraintError)?;
+        storage
+            .check_node_key_constraints(&labels, &properties)
+            .map_err(CypherError::ConstraintError)?;
+        storage
+            .check_property_type_constraints(&labels, &properties)
+            .map_err(CypherError::ConstraintError)?;
         let id = storage.create_node(labels, properties);
         if let Some(ref v) = var {
             let node = storage

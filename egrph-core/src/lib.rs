@@ -2495,6 +2495,114 @@ mod tests {
         g.execute("CREATE (n:Admin {gnId: 'abc'})").unwrap();
     }
 
+    // --- NOT NULL constraint tests ---
+
+    #[test]
+    fn test_not_null_constraint_success() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.email IS NOT NULL")
+            .unwrap();
+        // Property present → OK
+        g.execute("CREATE (:User {email: 'a@example.com'})")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_not_null_constraint_violation() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.email IS NOT NULL")
+            .unwrap();
+        // Missing property → should fail
+        assert!(g.execute("CREATE (:User {name: 'Alice'})").is_err());
+    }
+
+    #[test]
+    fn test_not_null_constraint_existing_violation() {
+        let mut g = Graph::new();
+        // Create node without the property first
+        g.execute("CREATE (:User {name: 'Alice'})").unwrap();
+        // Adding constraint should fail because existing node is missing the property
+        assert!(
+            g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE n.email IS NOT NULL")
+                .is_err()
+        );
+    }
+
+    // --- NODE KEY constraint tests ---
+
+    #[test]
+    fn test_node_key_constraint_success() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE (n.first, n.last) IS NODE KEY")
+            .unwrap();
+        g.execute("CREATE (:User {first: 'Alice', last: 'Smith'})")
+            .unwrap();
+        g.execute("CREATE (:User {first: 'Bob', last: 'Smith'})")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_node_key_constraint_duplicate_violation() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE (n.first, n.last) IS NODE KEY")
+            .unwrap();
+        g.execute("CREATE (:User {first: 'Alice', last: 'Smith'})")
+            .unwrap();
+        // Duplicate composite key → should fail
+        assert!(
+            g.execute("CREATE (:User {first: 'Alice', last: 'Smith'})")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_node_key_constraint_missing_property() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:User) REQUIRE (n.first, n.last) IS NODE KEY")
+            .unwrap();
+        // Missing one of the key properties → should fail
+        assert!(g.execute("CREATE (:User {first: 'Alice'})").is_err());
+    }
+
+    // --- PROPERTY TYPE constraint tests ---
+
+    #[test]
+    fn test_property_type_constraint_success() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:Product) REQUIRE n.price IS :: FLOAT")
+            .unwrap();
+        g.execute("CREATE (:Product {price: 9.99})").unwrap();
+    }
+
+    #[test]
+    fn test_property_type_constraint_violation() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:Product) REQUIRE n.price IS :: FLOAT")
+            .unwrap();
+        // Wrong type (string instead of float) → should fail
+        assert!(g.execute("CREATE (:Product {price: 'expensive'})").is_err());
+    }
+
+    #[test]
+    fn test_property_type_constraint_absent_ok() {
+        let mut g = Graph::new();
+        g.execute("CREATE CONSTRAINT FOR (n:Product) REQUIRE n.price IS :: FLOAT")
+            .unwrap();
+        // Property absent → OK (PROPERTY TYPE only enforces when present)
+        g.execute("CREATE (:Product {name: 'Widget'})").unwrap();
+    }
+
+    #[test]
+    fn test_property_type_constraint_existing_violation() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Product {price: 'free'})").unwrap();
+        // Adding type constraint should fail because existing node has wrong type
+        assert!(
+            g.execute("CREATE CONSTRAINT FOR (n:Product) REQUIRE n.price IS :: FLOAT")
+                .is_err()
+        );
+    }
+
     #[cfg(feature = "sled-storage")]
     mod sled_tests {
         use super::*;
