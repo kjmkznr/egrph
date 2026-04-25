@@ -14,7 +14,7 @@ pub fn plan(stmt: &Statement) -> Result<LogicalPlan, CypherError> {
         }),
         Statement::CreateConstraint(c) => Ok(LogicalPlan::CreateConstraint {
             label: c.label.clone(),
-            property: c.property.clone(),
+            properties: c.properties.clone(),
             constraint_type: c.constraint_type.clone(),
         }),
     }

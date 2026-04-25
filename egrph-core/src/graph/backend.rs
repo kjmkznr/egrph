@@ -117,4 +117,49 @@ pub trait StorageBackend {
 
     /// List all registered unique constraints as `(label, property)` pairs.
     fn list_unique_constraints(&self) -> Vec<(String, String)>;
+
+    /// Register a NOT NULL constraint for `property` on nodes with `label`.
+    /// Returns an error if existing nodes with `label` are missing `property`.
+    fn add_not_null_constraint(&mut self, label: &str, property: &str) -> Result<(), String>;
+
+    /// Check whether the given `properties` satisfy all NOT NULL constraints
+    /// for any of the given `labels`.
+    fn check_not_null_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String>;
+
+    /// Register a NODE KEY constraint for `properties` on nodes with `label`.
+    /// NODE KEY = composite uniqueness + all properties must be non-null.
+    /// Returns an error if existing data already violates the constraint.
+    fn add_node_key_constraint(&mut self, label: &str, properties: &[String])
+    -> Result<(), String>;
+
+    /// Check whether the given `node_properties` satisfy all NODE KEY constraints
+    /// for any of the given `labels`.
+    fn check_node_key_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String>;
+
+    /// Register a PROPERTY TYPE constraint: `property` on nodes with `label`
+    /// must have type `type_name` ("BOOLEAN", "STRING", "INTEGER", "FLOAT")
+    /// when present.
+    /// Returns an error if existing nodes violate the type constraint.
+    fn add_property_type_constraint(
+        &mut self,
+        label: &str,
+        property: &str,
+        type_name: &str,
+    ) -> Result<(), String>;
+
+    /// Check whether the given `properties` satisfy all PROPERTY TYPE constraints
+    /// for any of the given `labels`.
+    fn check_property_type_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String>;
 }

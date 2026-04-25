@@ -710,6 +710,10 @@ impl StorageBackend for SledStorage {
             .iter()
             .filter_map(|r| r.ok())
             .filter_map(|(k, _)| {
+                // Skip non-unique constraint entries (they start with 0x01)
+                if k.first() == Some(&0x01) {
+                    return None;
+                }
                 let s = std::str::from_utf8(&k).ok()?;
                 let mut parts = s.splitn(2, '\x00');
                 let label = parts.next()?.to_string();
@@ -717,6 +721,261 @@ impl StorageBackend for SledStorage {
                 Some((label, property))
             })
             .collect()
+    }
+
+    fn add_not_null_constraint(&mut self, label: &str, property: &str) -> Result<(), String> {
+        // Check existing nodes for violations.
+        let prefix = label_prefix(label);
+        let node_ids: Vec<NodeId> = self
+            .label_idx
+            .scan_prefix(&prefix)
+            .filter_map(|r| r.ok())
+            .filter_map(|(k, _)| {
+                let id_bytes = k.get(prefix.len()..)?;
+                if id_bytes.len() != 8 {
+                    return None;
+                }
+                Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+            })
+            .collect();
+        for nid in node_ids {
+            if let Some(node) = self.get_node(nid) {
+                if !node.properties.contains_key(property) {
+                    return Err(format!(
+                        "NOT NULL constraint violation: node {} with label {} is missing property {}",
+                        nid, label, property
+                    ));
+                }
+            }
+        }
+        // Key format: 0x01 NN 0x00 {label} 0x00 {property}
+        let mut key = vec![0x01, b'N', b'N', 0x00];
+        key.extend_from_slice(label.as_bytes());
+        key.push(0x00);
+        key.extend_from_slice(property.as_bytes());
+        self.constraints
+            .insert(key, b"")
+            .expect("constraint insert");
+        Ok(())
+    }
+
+    fn check_not_null_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String> {
+        for label in labels {
+            // Scan for NOT NULL constraints for this label
+            let mut prefix = vec![0x01, b'N', b'N', 0x00];
+            prefix.extend_from_slice(label.as_bytes());
+            prefix.push(0x00);
+            for entry in self.constraints.scan_prefix(&prefix).flatten() {
+                let (k, _) = entry;
+                if let Some(prop_bytes) = k.get(prefix.len()..) {
+                    if let Ok(prop) = std::str::from_utf8(prop_bytes) {
+                        if !properties.contains_key(prop) {
+                            return Err(format!(
+                                "NOT NULL constraint violation on {}:{}: property is required",
+                                label, prop
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_node_key_constraint(
+        &mut self,
+        label: &str,
+        properties: &[String],
+    ) -> Result<(), String> {
+        // Check existing nodes for violations.
+        let prefix = label_prefix(label);
+        let node_ids: Vec<NodeId> = self
+            .label_idx
+            .scan_prefix(&prefix)
+            .filter_map(|r| r.ok())
+            .filter_map(|(k, _)| {
+                let id_bytes = k.get(prefix.len()..)?;
+                if id_bytes.len() != 8 {
+                    return None;
+                }
+                Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+            })
+            .collect();
+        let mut seen: HashMap<Vec<String>, NodeId> = HashMap::new();
+        for nid in node_ids {
+            if let Some(node) = self.get_node(nid) {
+                for prop in properties {
+                    if !node.properties.contains_key(prop) {
+                        return Err(format!(
+                            "NODE KEY constraint violation: node {} with label {} is missing property {}",
+                            nid, label, prop
+                        ));
+                    }
+                }
+                let key: Vec<String> = properties
+                    .iter()
+                    .map(|p| format!("{:?}", node.properties.get(p)))
+                    .collect();
+                if let Some(&existing) = seen.get(&key) {
+                    return Err(format!(
+                        "NODE KEY constraint violation: nodes {} and {} both have the same key for label {}",
+                        existing, nid, label
+                    ));
+                }
+                seen.insert(key, nid);
+            }
+        }
+        // Key format: 0x01 NK 0x00 {label} 0x00 {prop1,prop2,...}
+        let mut key = vec![0x01, b'N', b'K', 0x00];
+        key.extend_from_slice(label.as_bytes());
+        key.push(0x00);
+        key.extend_from_slice(properties.join(",").as_bytes());
+        self.constraints
+            .insert(key, b"")
+            .expect("constraint insert");
+        Ok(())
+    }
+
+    fn check_node_key_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String> {
+        for label in labels {
+            let mut prefix = vec![0x01, b'N', b'K', 0x00];
+            prefix.extend_from_slice(label.as_bytes());
+            prefix.push(0x00);
+            for entry in self.constraints.scan_prefix(&prefix).flatten() {
+                let (k, _) = entry;
+                if let Some(props_bytes) = k.get(prefix.len()..) {
+                    if let Ok(props_str) = std::str::from_utf8(props_bytes) {
+                        let key_props: Vec<&str> = props_str.split(',').collect();
+                        // All key properties must be present
+                        for prop in &key_props {
+                            if !properties.contains_key(*prop) {
+                                return Err(format!(
+                                    "NODE KEY constraint violation on {}:{}: property is required",
+                                    label, prop
+                                ));
+                            }
+                        }
+                        // Tuple must be unique among existing nodes
+                        let new_key: Vec<String> = key_props
+                            .iter()
+                            .map(|p| format!("{:?}", properties.get(*p)))
+                            .collect();
+                        let label_prefix_bytes = label_prefix(label);
+                        let node_ids: Vec<NodeId> = self
+                            .label_idx
+                            .scan_prefix(&label_prefix_bytes)
+                            .filter_map(|r| r.ok())
+                            .filter_map(|(nk, _)| {
+                                let id_bytes = nk.get(label_prefix_bytes.len()..)?;
+                                if id_bytes.len() != 8 {
+                                    return None;
+                                }
+                                Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+                            })
+                            .collect();
+                        for nid in node_ids {
+                            if let Some(node) = self.get_node(nid) {
+                                let existing_key: Vec<String> = key_props
+                                    .iter()
+                                    .map(|p| format!("{:?}", node.properties.get(*p)))
+                                    .collect();
+                                if new_key == existing_key {
+                                    return Err(format!(
+                                        "NODE KEY constraint violation on {}: duplicate key {:?}",
+                                        label, new_key
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_property_type_constraint(
+        &mut self,
+        label: &str,
+        property: &str,
+        type_name: &str,
+    ) -> Result<(), String> {
+        // Check existing nodes for type violations.
+        let prefix = label_prefix(label);
+        let node_ids: Vec<NodeId> = self
+            .label_idx
+            .scan_prefix(&prefix)
+            .filter_map(|r| r.ok())
+            .filter_map(|(k, _)| {
+                let id_bytes = k.get(prefix.len()..)?;
+                if id_bytes.len() != 8 {
+                    return None;
+                }
+                Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+            })
+            .collect();
+        for nid in node_ids {
+            if let Some(node) = self.get_node(nid) {
+                if let Some(val) = node.properties.get(property) {
+                    if !property_value_matches_type(val, type_name) {
+                        return Err(format!(
+                            "PROPERTY TYPE constraint violation: node {} property {}:{} has wrong type (expected {})",
+                            nid, label, property, type_name
+                        ));
+                    }
+                }
+            }
+        }
+        // Key format: 0x01 PT 0x00 {label} 0x00 {property} 0x00 {type_name}
+        let mut key = vec![0x01, b'P', b'T', 0x00];
+        key.extend_from_slice(label.as_bytes());
+        key.push(0x00);
+        key.extend_from_slice(property.as_bytes());
+        key.push(0x00);
+        key.extend_from_slice(type_name.as_bytes());
+        self.constraints
+            .insert(key, b"")
+            .expect("constraint insert");
+        Ok(())
+    }
+
+    fn check_property_type_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String> {
+        for label in labels {
+            let mut prefix = vec![0x01, b'P', b'T', 0x00];
+            prefix.extend_from_slice(label.as_bytes());
+            prefix.push(0x00);
+            for entry in self.constraints.scan_prefix(&prefix).flatten() {
+                let (k, _) = entry;
+                if let Some(rest) = k.get(prefix.len()..) {
+                    if let Ok(rest_str) = std::str::from_utf8(rest) {
+                        let mut parts = rest_str.splitn(2, '\x00');
+                        if let (Some(prop), Some(type_name)) = (parts.next(), parts.next()) {
+                            if let Some(val) = properties.get(prop) {
+                                if !property_value_matches_type(val, type_name) {
+                                    return Err(format!(
+                                        "PROPERTY TYPE constraint violation on {}:{}: expected type {}",
+                                        label, prop, type_name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -726,6 +985,16 @@ fn property_values_equal(a: &PropertyValue, b: &PropertyValue) -> bool {
         (PropertyValue::Int(a), PropertyValue::Int(b)) => a == b,
         (PropertyValue::Float(a), PropertyValue::Float(b)) => a == b,
         (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn property_value_matches_type(val: &PropertyValue, type_name: &str) -> bool {
+    match type_name {
+        "BOOLEAN" => matches!(val, PropertyValue::Bool(_)),
+        "STRING" => matches!(val, PropertyValue::String(_)),
+        "INTEGER" => matches!(val, PropertyValue::Int(_)),
+        "FLOAT" => matches!(val, PropertyValue::Float(_)),
         _ => false,
     }
 }

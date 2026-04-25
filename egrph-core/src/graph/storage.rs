@@ -14,6 +14,12 @@ pub struct MemoryStorage {
     next_edge_id: EdgeId,
     /// Unique constraints: label -> set of property names.
     unique_constraints: HashMap<String, HashSet<String>>,
+    /// NOT NULL constraints: label -> set of property names that must be non-null.
+    not_null_constraints: HashMap<String, HashSet<String>>,
+    /// NODE KEY constraints: label -> list of property-key-tuples (each tuple must be unique and non-null).
+    node_key_constraints: HashMap<String, Vec<Vec<String>>>,
+    /// PROPERTY TYPE constraints: label -> property name -> type name ("BOOLEAN"|"STRING"|"INTEGER"|"FLOAT").
+    property_type_constraints: HashMap<String, HashMap<String, String>>,
     /// Property index: prop_name -> prop_value_key -> set of NodeIds.
     /// Enables O(1) property lookup instead of O(N) full scan.
     property_index: HashMap<String, HashMap<String, HashSet<NodeId>>>,
@@ -523,6 +529,184 @@ impl StorageBackend for MemoryStorage {
         result
     }
 
+    fn add_not_null_constraint(&mut self, label: &str, property: &str) -> Result<(), String> {
+        // Check existing nodes for violations.
+        if let Some(node_ids) = self.label_index.get(label) {
+            for &nid in node_ids {
+                if let Some(node) = self.nodes.get(&nid) {
+                    if !node.properties.contains_key(property) {
+                        return Err(format!(
+                            "NOT NULL constraint violation: node {} with label {} is missing property {}",
+                            nid, label, property
+                        ));
+                    }
+                }
+            }
+        }
+        self.not_null_constraints
+            .entry(label.to_string())
+            .or_default()
+            .insert(property.to_string());
+        Ok(())
+    }
+
+    fn check_not_null_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String> {
+        for label in labels {
+            if let Some(required_props) = self.not_null_constraints.get(label) {
+                for prop in required_props {
+                    if !properties.contains_key(prop) {
+                        return Err(format!(
+                            "NOT NULL constraint violation on {}:{}: property is required",
+                            label, prop
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_node_key_constraint(
+        &mut self,
+        label: &str,
+        properties: &[String],
+    ) -> Result<(), String> {
+        // Check existing nodes for violations: all props must be present and tuple must be unique.
+        if let Some(node_ids) = self.label_index.get(label) {
+            let node_ids: Vec<NodeId> = node_ids.iter().copied().collect();
+            let mut seen: HashMap<Vec<String>, NodeId> = HashMap::new();
+            for nid in node_ids {
+                if let Some(node) = self.nodes.get(&nid) {
+                    // Check all properties are non-null
+                    for prop in properties {
+                        if !node.properties.contains_key(prop) {
+                            return Err(format!(
+                                "NODE KEY constraint violation: node {} with label {} is missing property {}",
+                                nid, label, prop
+                            ));
+                        }
+                    }
+                    // Check tuple uniqueness
+                    let key: Vec<String> = properties
+                        .iter()
+                        .map(|p| format!("{:?}", node.properties.get(p)))
+                        .collect();
+                    if let Some(&existing) = seen.get(&key) {
+                        return Err(format!(
+                            "NODE KEY constraint violation: nodes {} and {} both have the same key for label {}",
+                            existing, nid, label
+                        ));
+                    }
+                    seen.insert(key, nid);
+                }
+            }
+        }
+        self.node_key_constraints
+            .entry(label.to_string())
+            .or_default()
+            .push(properties.to_vec());
+        Ok(())
+    }
+
+    fn check_node_key_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String> {
+        for label in labels {
+            if let Some(key_tuples) = self.node_key_constraints.get(label) {
+                for key_props in key_tuples {
+                    // All key properties must be present (non-null)
+                    for prop in key_props {
+                        if !properties.contains_key(prop) {
+                            return Err(format!(
+                                "NODE KEY constraint violation on {}:{}: property is required",
+                                label, prop
+                            ));
+                        }
+                    }
+                    // Tuple must be unique
+                    if let Some(node_ids) = self.label_index.get(label) {
+                        let new_key: Vec<String> = key_props
+                            .iter()
+                            .map(|p| format!("{:?}", properties.get(p)))
+                            .collect();
+                        for &nid in node_ids {
+                            if let Some(node) = self.nodes.get(&nid) {
+                                let existing_key: Vec<String> = key_props
+                                    .iter()
+                                    .map(|p| format!("{:?}", node.properties.get(p)))
+                                    .collect();
+                                if new_key == existing_key {
+                                    return Err(format!(
+                                        "NODE KEY constraint violation on {}: duplicate key {:?}",
+                                        label, new_key
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_property_type_constraint(
+        &mut self,
+        label: &str,
+        property: &str,
+        type_name: &str,
+    ) -> Result<(), String> {
+        // Check existing nodes for type violations (only if property is present).
+        if let Some(node_ids) = self.label_index.get(label) {
+            for &nid in node_ids {
+                if let Some(node) = self.nodes.get(&nid) {
+                    if let Some(val) = node.properties.get(property) {
+                        if !property_value_matches_type(val, type_name) {
+                            return Err(format!(
+                                "PROPERTY TYPE constraint violation: node {} property {}:{} has wrong type (expected {})",
+                                nid, label, property, type_name
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        self.property_type_constraints
+            .entry(label.to_string())
+            .or_default()
+            .insert(property.to_string(), type_name.to_string());
+        Ok(())
+    }
+
+    fn check_property_type_constraints(
+        &self,
+        labels: &[String],
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Result<(), String> {
+        for label in labels {
+            if let Some(type_map) = self.property_type_constraints.get(label) {
+                for (prop, type_name) in type_map {
+                    if let Some(val) = properties.get(prop) {
+                        if !property_value_matches_type(val, type_name) {
+                            return Err(format!(
+                                "PROPERTY TYPE constraint violation on {}:{}: expected type {}",
+                                label, prop, type_name
+                            ));
+                        }
+                    }
+                    // If property is absent, that's OK for PROPERTY TYPE constraints.
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn delete_edge(&mut self, id: EdgeId) -> Result<(), String> {
         if let Some(edge) = self.edges.remove(&id) {
             if let Some(out) = self.outgoing.get_mut(&edge.src) {
@@ -544,6 +728,16 @@ fn property_values_equal(a: &PropertyValue, b: &PropertyValue) -> bool {
         (PropertyValue::Int(a), PropertyValue::Int(b)) => a == b,
         (PropertyValue::Float(a), PropertyValue::Float(b)) => a == b,
         (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn property_value_matches_type(val: &PropertyValue, type_name: &str) -> bool {
+    match type_name {
+        "BOOLEAN" => matches!(val, PropertyValue::Bool(_)),
+        "STRING" => matches!(val, PropertyValue::String(_)),
+        "INTEGER" => matches!(val, PropertyValue::Int(_)),
+        "FLOAT" => matches!(val, PropertyValue::Float(_)),
         _ => false,
     }
 }

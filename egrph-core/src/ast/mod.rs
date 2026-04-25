@@ -15,13 +15,26 @@ pub enum Statement {
 pub struct CreateConstraintStatement {
     pub variable: String,
     pub label: String,
-    pub property: String,
+    /// For single-property constraints this is a one-element Vec.
+    /// For NODE KEY it may contain multiple property names.
+    pub properties: Vec<String>,
     pub constraint_type: ConstraintType,
 }
 
 #[derive(Debug, Clone)]
 pub enum ConstraintType {
     Unique,
+    NotNull,
+    NodeKey,
+    PropertyType(PropertyTypeKind),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyTypeKind {
+    Boolean,
+    String,
+    Integer,
+    Float,
 }
 
 #[derive(Debug, Clone)]

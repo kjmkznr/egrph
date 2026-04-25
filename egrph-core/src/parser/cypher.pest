@@ -8,8 +8,22 @@ statement = { SOI ~ (create_constraint_stmt | query ~ (union_op ~ query)*) ~ EOI
 create_constraint_stmt = {
     ^"CREATE" ~ ^"CONSTRAINT" ~ ^"FOR" ~
     "(" ~ variable ~ labels ~ ")" ~
-    ^"REQUIRE" ~ variable ~ "." ~ IDENTIFIER ~ ^"IS" ~ ^"UNIQUE"
+    ^"REQUIRE" ~ constraint_body
 }
+constraint_body = {
+    constraint_prop_tuple ~ is_node_key_assertion
+  | constraint_prop_single ~ constraint_single_assertion
+}
+constraint_prop_single    = { variable ~ "." ~ IDENTIFIER }
+constraint_prop_tuple     = { "(" ~ constraint_prop_single ~ ("," ~ constraint_prop_single)* ~ ")" }
+constraint_single_assertion = {
+    is_unique_assertion | is_not_null_assertion | is_property_type_assertion
+}
+is_unique_assertion         = { ^"IS" ~ ^"UNIQUE" }
+is_not_null_assertion       = { ^"IS" ~ ^"NOT" ~ ^"NULL" }
+is_node_key_assertion       = { ^"IS" ~ ^"NODE" ~ ^"KEY" }
+is_property_type_assertion  = { ^"IS" ~ "::" ~ property_type_name }
+property_type_name = { ^"BOOLEAN" | ^"STRING" | ^"INTEGER" | ^"FLOAT" }
 union_op  = { union_kw ~ all_kw? }
 union_kw  = @{ ^"UNION" ~ !ASCII_ALPHANUMERIC }
 all_kw    = @{ ^"ALL"   ~ !ASCII_ALPHANUMERIC }

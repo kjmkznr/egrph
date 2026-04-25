@@ -151,7 +151,7 @@ pub enum LogicalPlan {
     /// CREATE CONSTRAINT: register a constraint on the storage layer.
     CreateConstraint {
         label: String,
-        property: String,
+        properties: Vec<String>,
         constraint_type: ConstraintType,
     },
 }

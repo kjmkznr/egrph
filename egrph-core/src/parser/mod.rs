@@ -114,7 +114,7 @@ fn parse_clause(
 fn parse_create_constraint_stmt(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<Statement, CypherError> {
-    // Grammar: CREATE CONSTRAINT FOR "(" variable labels ")" REQUIRE variable "." IDENTIFIER IS UNIQUE
+    // Grammar: CREATE CONSTRAINT FOR "(" variable labels ")" REQUIRE constraint_body
     let mut inners = pair.into_inner();
 
     // First variable (pattern variable, e.g. "n")
@@ -134,20 +134,104 @@ fn parse_create_constraint_stmt(
         .as_str()
         .to_string();
 
-    // Second variable after REQUIRE (ignored, same as first)
-    inners.next(); // skip REQUIRE variable
-
-    // property name (IDENTIFIER after ".")
-    let prop_pair = inners
+    // constraint_body
+    let body_pair = inners
         .next()
-        .ok_or_else(|| CypherError::ParseError("Expected property in constraint".to_string()))?;
-    let property = prop_pair.as_str().to_string();
+        .ok_or_else(|| CypherError::ParseError("Expected constraint body".to_string()))?;
+    let mut body_inners = body_pair.into_inner();
+
+    // First child: either constraint_prop_single or constraint_prop_tuple
+    let first = body_inners
+        .next()
+        .ok_or_else(|| CypherError::ParseError("Expected constraint property spec".to_string()))?;
+
+    let (properties, constraint_type) = match first.as_rule() {
+        Rule::constraint_prop_tuple => {
+            // NODE KEY: tuple of one or more constraint_prop_single entries
+            let props: Vec<String> = first
+                .into_inner()
+                .filter(|p| p.as_rule() == Rule::constraint_prop_single)
+                .map(|p| {
+                    // constraint_prop_single inner: [variable, IDENTIFIER] ("." is not a pair)
+                    let mut inner = p.into_inner();
+                    inner.next(); // skip variable (REQUIRE variable)
+                    inner
+                        .next()
+                        .map(|id| id.as_str().to_string())
+                        .ok_or_else(|| {
+                            CypherError::ParseError(
+                                "Expected property name in NODE KEY".to_string(),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // Next should be is_node_key_assertion — we just confirm the constraint type
+            (props, ConstraintType::NodeKey)
+        }
+        Rule::constraint_prop_single => {
+            // Single property constraint
+            let mut prop_inner = first.into_inner();
+            prop_inner.next(); // skip variable
+            let prop_name = prop_inner
+                .next()
+                .ok_or_else(|| {
+                    CypherError::ParseError("Expected property name in constraint".to_string())
+                })?
+                .as_str()
+                .to_string();
+
+            // Next: constraint_single_assertion
+            let assertion = body_inners.next().ok_or_else(|| {
+                CypherError::ParseError("Expected constraint assertion".to_string())
+            })?;
+            let inner_assertion = assertion
+                .into_inner()
+                .next()
+                .ok_or_else(|| CypherError::ParseError("Expected assertion kind".to_string()))?;
+
+            let ct = match inner_assertion.as_rule() {
+                Rule::is_unique_assertion => ConstraintType::Unique,
+                Rule::is_not_null_assertion => ConstraintType::NotNull,
+                Rule::is_property_type_assertion => {
+                    let type_pair = inner_assertion.into_inner().next().ok_or_else(|| {
+                        CypherError::ParseError("Expected property type name".to_string())
+                    })?;
+                    let kind = match type_pair.as_str().to_uppercase().as_str() {
+                        "BOOLEAN" => PropertyTypeKind::Boolean,
+                        "STRING" => PropertyTypeKind::String,
+                        "INTEGER" => PropertyTypeKind::Integer,
+                        "FLOAT" => PropertyTypeKind::Float,
+                        other => {
+                            return Err(CypherError::ParseError(format!(
+                                "Unknown property type: {}",
+                                other
+                            )));
+                        }
+                    };
+                    ConstraintType::PropertyType(kind)
+                }
+                _ => {
+                    return Err(CypherError::ParseError(format!(
+                        "Unexpected assertion rule: {:?}",
+                        inner_assertion.as_rule()
+                    )));
+                }
+            };
+            (vec![prop_name], ct)
+        }
+        _ => {
+            return Err(CypherError::ParseError(format!(
+                "Unexpected constraint body rule: {:?}",
+                first.as_rule()
+            )));
+        }
+    };
 
     Ok(Statement::CreateConstraint(CreateConstraintStatement {
         variable,
         label,
-        property,
-        constraint_type: ConstraintType::Unique,
+        properties,
+        constraint_type,
     }))
 }
 
