@@ -533,13 +533,13 @@ impl StorageBackend for MemoryStorage {
         // Check existing nodes for violations.
         if let Some(node_ids) = self.label_index.get(label) {
             for &nid in node_ids {
-                if let Some(node) = self.nodes.get(&nid) {
-                    if !node.properties.contains_key(property) {
-                        return Err(format!(
-                            "NOT NULL constraint violation: node {} with label {} is missing property {}",
-                            nid, label, property
-                        ));
-                    }
+                if let Some(node) = self.nodes.get(&nid)
+                    && !node.properties.contains_key(property)
+                {
+                    return Err(format!(
+                        "NOT NULL constraint violation: node {} with label {} is missing property {}",
+                        nid, label, property
+                    ));
                 }
             }
         }
@@ -665,15 +665,14 @@ impl StorageBackend for MemoryStorage {
         // Check existing nodes for type violations (only if property is present).
         if let Some(node_ids) = self.label_index.get(label) {
             for &nid in node_ids {
-                if let Some(node) = self.nodes.get(&nid) {
-                    if let Some(val) = node.properties.get(property) {
-                        if !property_value_matches_type(val, type_name) {
-                            return Err(format!(
-                                "PROPERTY TYPE constraint violation: node {} property {}:{} has wrong type (expected {})",
-                                nid, label, property, type_name
-                            ));
-                        }
-                    }
+                if let Some(node) = self.nodes.get(&nid)
+                    && let Some(val) = node.properties.get(property)
+                    && !property_value_matches_type(val, type_name)
+                {
+                    return Err(format!(
+                        "PROPERTY TYPE constraint violation: node {} property {}:{} has wrong type (expected {})",
+                        nid, label, property, type_name
+                    ));
                 }
             }
         }
@@ -692,13 +691,13 @@ impl StorageBackend for MemoryStorage {
         for label in labels {
             if let Some(type_map) = self.property_type_constraints.get(label) {
                 for (prop, type_name) in type_map {
-                    if let Some(val) = properties.get(prop) {
-                        if !property_value_matches_type(val, type_name) {
-                            return Err(format!(
-                                "PROPERTY TYPE constraint violation on {}:{}: expected type {}",
-                                label, prop, type_name
-                            ));
-                        }
+                    if let Some(val) = properties.get(prop)
+                        && !property_value_matches_type(val, type_name)
+                    {
+                        return Err(format!(
+                            "PROPERTY TYPE constraint violation on {}:{}: expected type {}",
+                            label, prop, type_name
+                        ));
                     }
                     // If property is absent, that's OK for PROPERTY TYPE constraints.
                 }
