@@ -3412,4 +3412,278 @@ mod tests {
         let result = g.execute(&query).unwrap();
         assert_eq!(result.rows.len(), 1);
     }
+
+    // --- Phase 1 new functions ---
+
+    #[test]
+    fn test_concat() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN concat('hello', ' ', 'world')").unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::String("hello world".to_string())
+        );
+
+        // null propagation
+        let r2 = g.execute("RETURN concat('a', null, 'b')").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_cast_aliases() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN string(42)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::String("42".to_string()));
+
+        let r2 = g.execute("RETURN int64('123')").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Integer(123));
+
+        let r3 = g.execute("RETURN double('3.14')").unwrap();
+        assert_eq!(r3.rows[0].values[0], CypherValue::Float(3.14));
+
+        let r4 = g.execute("RETURN cast_to_string(true)").unwrap();
+        assert_eq!(
+            r4.rows[0].values[0],
+            CypherValue::String("true".to_string())
+        );
+
+        let r5 = g.execute("RETURN cast_to_int64(9)").unwrap();
+        assert_eq!(r5.rows[0].values[0], CypherValue::Integer(9));
+
+        let r6 = g.execute("RETURN cast_to_double(2)").unwrap();
+        assert_eq!(r6.rows[0].values[0], CypherValue::Float(2.0));
+    }
+
+    #[test]
+    fn test_regexp_matches() {
+        let mut g = Graph::new();
+        let r = g
+            .execute("RETURN regexp_matches('hello', 'hel+o')")
+            .unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+
+        let r2 = g
+            .execute("RETURN regexp_matches('hello', 'world')")
+            .unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Boolean(false));
+    }
+
+    #[test]
+    fn test_regexp_replace() {
+        let mut g = Graph::new();
+        let r = g
+            .execute("RETURN regexp_replace('hello world', 'o', '0')")
+            .unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::String("hell0 w0rld".to_string())
+        );
+    }
+
+    #[test]
+    fn test_regexp_extract() {
+        let mut g = Graph::new();
+        // Extract first capture group
+        let r = g
+            .execute("RETURN regexp_extract('hello world', '([a-z]+) ([a-z]+)', 1)")
+            .unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::String("hello".to_string())
+        );
+
+        // Extract whole match (group 0)
+        let r2 = g
+            .execute("RETURN regexp_extract('foo123bar', '[0-9]+')")
+            .unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::String("123".to_string()));
+
+        // no match returns null
+        let r3 = g.execute("RETURN regexp_extract('abc', '[0-9]+')").unwrap();
+        assert_eq!(r3.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_list_append() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN list_append([1, 2], 3)").unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![
+                CypherValue::Integer(1),
+                CypherValue::Integer(2),
+                CypherValue::Integer(3)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_list_prepend() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN list_prepend([2, 3], 1)").unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![
+                CypherValue::Integer(1),
+                CypherValue::Integer(2),
+                CypherValue::Integer(3)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_list_extract() {
+        let mut g = Graph::new();
+        // 1-based
+        let r = g.execute("RETURN list_extract([10, 20, 30], 2)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Integer(20));
+
+        // negative index (from end)
+        let r2 = g.execute("RETURN list_extract([10, 20, 30], -1)").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Integer(30));
+
+        // out of bounds
+        let r3 = g.execute("RETURN list_extract([10, 20], 5)").unwrap();
+        assert_eq!(r3.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_list_contains() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN list_contains([1, 2, 3], 2)").unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Boolean(true));
+
+        let r2 = g.execute("RETURN list_contains([1, 2, 3], 9)").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Boolean(false));
+    }
+
+    #[test]
+    fn test_list_sort() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN list_sort([3, 1, 2])").unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![
+                CypherValue::Integer(1),
+                CypherValue::Integer(2),
+                CypherValue::Integer(3)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_list_distinct() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN list_distinct([1, 2, 1, 3, 2])").unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![
+                CypherValue::Integer(1),
+                CypherValue::Integer(2),
+                CypherValue::Integer(3)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_list_value() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN list_value(1, 2, 3)").unwrap();
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![
+                CypherValue::Integer(1),
+                CypherValue::Integer(2),
+                CypherValue::Integer(3)
+            ])
+        );
+    }
+
+    // --- Phase 2: Date / Timestamp functions ---
+
+    #[test]
+    fn test_current_date() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN current_date()").unwrap();
+        assert!(matches!(r.rows[0].values[0], CypherValue::Date(_)));
+    }
+
+    #[test]
+    fn test_current_timestamp() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN current_timestamp()").unwrap();
+        assert!(matches!(r.rows[0].values[0], CypherValue::Timestamp(_)));
+    }
+
+    #[test]
+    fn test_make_date() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN make_date(2026, 4, 25)").unwrap();
+        use chrono::NaiveDate;
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::Date(NaiveDate::from_ymd_opt(2026, 4, 25).unwrap())
+        );
+
+        // invalid date
+        let r2 = g.execute("RETURN make_date(2026, 13, 1)").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_date_cast() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN date('2026-04-25')").unwrap();
+        use chrono::NaiveDate;
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::Date(NaiveDate::from_ymd_opt(2026, 4, 25).unwrap())
+        );
+
+        // invalid string
+        let r2 = g.execute("RETURN date('not-a-date')").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_date_part() {
+        let mut g = Graph::new();
+        let r = g
+            .execute("RETURN date_part('year', make_date(2026, 4, 25))")
+            .unwrap();
+        assert_eq!(r.rows[0].values[0], CypherValue::Integer(2026));
+
+        let r2 = g
+            .execute("RETURN date_part('month', make_date(2026, 4, 25))")
+            .unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Integer(4));
+
+        let r3 = g
+            .execute("RETURN date_part('day', make_date(2026, 4, 25))")
+            .unwrap();
+        assert_eq!(r3.rows[0].values[0], CypherValue::Integer(25));
+    }
+
+    #[test]
+    fn test_to_timestamp_epoch_ms() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN to_timestamp(0)").unwrap();
+        assert!(matches!(r.rows[0].values[0], CypherValue::Timestamp(_)));
+
+        let r2 = g.execute("RETURN epoch_ms(to_timestamp(1000))").unwrap();
+        assert_eq!(r2.rows[0].values[0], CypherValue::Integer(1_000_000));
+    }
+
+    #[test]
+    fn test_show_functions() {
+        let mut g = Graph::new();
+        let r = g.execute("RETURN show_functions()").unwrap();
+        if let CypherValue::List(names) = &r.rows[0].values[0] {
+            assert!(names.contains(&CypherValue::String("concat".to_string())));
+            assert!(names.contains(&CypherValue::String("list_sort".to_string())));
+            assert!(names.contains(&CypherValue::String("regexp_replace".to_string())));
+        } else {
+            panic!("expected List from show_functions()");
+        }
+    }
 }

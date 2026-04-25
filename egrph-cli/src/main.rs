@@ -422,6 +422,8 @@ fn cypher_to_display(value: &CypherValue) -> String {
                 path.relationships.len()
             )
         }
+        CypherValue::Date(d) => d.to_string(),
+        CypherValue::Timestamp(ts) => ts.to_rfc3339(),
     }
 }
 

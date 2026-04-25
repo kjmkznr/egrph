@@ -174,6 +174,8 @@ fn cypher_value_to_json(val: &CypherValue) -> Result<serde_json::Value, JsValue>
                 "Path results are not yet supported in WASM bindings",
             ));
         }
+        CypherValue::Date(d) => serde_json::Value::String(d.to_string()),
+        CypherValue::Timestamp(ts) => serde_json::Value::String(ts.to_rfc3339()),
     })
 }
 

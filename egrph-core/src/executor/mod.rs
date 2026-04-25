@@ -2103,6 +2103,8 @@ fn cypher_value_type_name(val: &CypherValue) -> &'static str {
         CypherValue::Node(_) => "Node",
         CypherValue::Relationship(_) => "Relationship",
         CypherValue::Path(_) => "Path",
+        CypherValue::Date(_) => "Date",
+        CypherValue::Timestamp(_) => "Timestamp",
     }
 }
 

@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -46,4 +47,6 @@ pub enum CypherValue {
     Node(Node),
     Relationship(Edge),
     Path(Path),
+    Date(NaiveDate),
+    Timestamp(DateTime<Utc>),
 }

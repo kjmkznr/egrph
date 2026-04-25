@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::error::CypherError;
 use crate::graph::backend::StorageBackend;
 use crate::graph::types::*;
+use chrono::{Datelike, NaiveDate, TimeZone, Timelike, Utc};
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -505,6 +506,8 @@ pub fn compare_values(left: &CypherValue, right: &CypherValue) -> Option<std::cm
         (CypherValue::Float(l), CypherValue::Integer(r)) => l.partial_cmp(&(*r as f64)),
         (CypherValue::String(l), CypherValue::String(r)) => Some(l.cmp(r)),
         (CypherValue::Boolean(l), CypherValue::Boolean(r)) => Some(l.cmp(r)),
+        (CypherValue::Date(l), CypherValue::Date(r)) => Some(l.cmp(r)),
+        (CypherValue::Timestamp(l), CypherValue::Timestamp(r)) => Some(l.cmp(r)),
         _ => None,
     }
 }
@@ -978,7 +981,7 @@ fn eval_function(
             }
             CypherValue::Null
         }
-        "tostring" => {
+        "tostring" | "string" | "cast_to_string" => {
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
                 // openCypher: toString is defined for scalars only; other types -> null (TypeError)
@@ -994,7 +997,7 @@ fn eval_function(
                 CypherValue::Null
             }
         }
-        "tointeger" | "toint" => {
+        "tointeger" | "toint" | "int64" | "cast_to_int64" => {
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
@@ -1023,7 +1026,7 @@ fn eval_function(
                 CypherValue::Null
             }
         }
-        "tofloat" => {
+        "tofloat" | "double" | "cast_to_double" => {
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
                 match &val {
@@ -1219,6 +1222,78 @@ fn eval_function(
                 CypherValue::Null
             }
         }
+        "concat" => {
+            let mut result = String::new();
+            for arg in args {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match val {
+                    CypherValue::Null => return Ok(CypherValue::Null),
+                    CypherValue::String(s) => result.push_str(&s),
+                    _ => return Ok(CypherValue::Null),
+                }
+            }
+            CypherValue::String(result)
+        }
+        "regexp_matches" => {
+            if args.len() >= 2 {
+                let text = eval_with_params(&args[0], record, params, storage)?;
+                let pattern = eval_with_params(&args[1], record, params, storage)?;
+                eval_regex_match(&text, &pattern)
+            } else {
+                CypherValue::Null
+            }
+        }
+        "regexp_replace" => {
+            if args.len() >= 3 {
+                let text = eval_with_params(&args[0], record, params, storage)?;
+                let pattern = eval_with_params(&args[1], record, params, storage)?;
+                let replacement = eval_with_params(&args[2], record, params, storage)?;
+                match (&text, &pattern, &replacement) {
+                    (CypherValue::Null, _, _)
+                    | (_, CypherValue::Null, _)
+                    | (_, _, CypherValue::Null) => CypherValue::Null,
+                    (CypherValue::String(s), CypherValue::String(p), CypherValue::String(r)) => {
+                        match Regex::new(p) {
+                            Ok(re) => {
+                                CypherValue::String(re.replace_all(s, r.as_str()).into_owned())
+                            }
+                            Err(_) => CypherValue::Null,
+                        }
+                    }
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "regexp_extract" => {
+            if args.len() >= 2 {
+                let text = eval_with_params(&args[0], record, params, storage)?;
+                let pattern = eval_with_params(&args[1], record, params, storage)?;
+                let group: usize = if args.len() >= 3 {
+                    match eval_with_params(&args[2], record, params, storage)? {
+                        CypherValue::Integer(i) => i.max(0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+                match (&text, &pattern) {
+                    (CypherValue::Null, _) | (_, CypherValue::Null) => CypherValue::Null,
+                    (CypherValue::String(s), CypherValue::String(p)) => match Regex::new(p) {
+                        Ok(re) => re
+                            .captures(s)
+                            .and_then(|c| c.get(group))
+                            .map(|m| CypherValue::String(m.as_str().to_string()))
+                            .unwrap_or(CypherValue::Null),
+                        Err(_) => CypherValue::Null,
+                    },
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
         // Math functions
         "abs" => math_fn_1(args, record, params, storage, |v| match v {
             // checked_abs prevents undefined behaviour for i64::MIN (whose absolute value
@@ -1335,6 +1410,121 @@ fn eval_function(
             } else {
                 CypherValue::Null
             }
+        }
+        "list_append" | "array_append" | "list_push_back" => {
+            if args.len() >= 2 {
+                let list = eval_with_params(&args[0], record, params, storage)?;
+                let elem = eval_with_params(&args[1], record, params, storage)?;
+                match list {
+                    CypherValue::List(mut items) => {
+                        items.push(elem);
+                        CypherValue::List(items)
+                    }
+                    CypherValue::Null => CypherValue::Null,
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "list_prepend" | "array_prepend" | "list_push_front" => {
+            if args.len() >= 2 {
+                let list = eval_with_params(&args[0], record, params, storage)?;
+                let elem = eval_with_params(&args[1], record, params, storage)?;
+                match list {
+                    CypherValue::List(mut items) => {
+                        items.insert(0, elem);
+                        CypherValue::List(items)
+                    }
+                    CypherValue::Null => CypherValue::Null,
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "list_extract" | "array_extract" => {
+            if args.len() >= 2 {
+                let list = eval_with_params(&args[0], record, params, storage)?;
+                let idx = eval_with_params(&args[1], record, params, storage)?;
+                match (list, &idx) {
+                    (CypherValue::List(items), CypherValue::Integer(i)) => {
+                        // 1-based (DuckDB-compatible); negative indices count from end
+                        let pos = if *i > 0 {
+                            Some((*i - 1) as usize)
+                        } else if *i < 0 {
+                            let neg = (-*i) as usize;
+                            items.len().checked_sub(neg)
+                        } else {
+                            None
+                        };
+                        pos.and_then(|p| items.into_iter().nth(p))
+                            .unwrap_or(CypherValue::Null)
+                    }
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "list_contains" | "array_contains" | "list_has" => {
+            if args.len() >= 2 {
+                let list = eval_with_params(&args[0], record, params, storage)?;
+                let elem = eval_with_params(&args[1], record, params, storage)?;
+                match list {
+                    CypherValue::List(items) => CypherValue::Boolean(items.contains(&elem)),
+                    CypherValue::Null => CypherValue::Null,
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "list_sort" | "array_sort" => {
+            if let Some(arg) = args.first() {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match val {
+                    CypherValue::List(mut items) => {
+                        items.sort_by(|a, b| {
+                            compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        CypherValue::List(items)
+                    }
+                    CypherValue::Null => CypherValue::Null,
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "list_distinct" | "array_distinct" => {
+            if let Some(arg) = args.first() {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match val {
+                    CypherValue::List(items) => {
+                        let mut seen: Vec<CypherValue> = Vec::new();
+                        let mut result = Vec::new();
+                        for item in items {
+                            if !seen.contains(&item) {
+                                seen.push(item.clone());
+                                result.push(item);
+                            }
+                        }
+                        CypherValue::List(result)
+                    }
+                    CypherValue::Null => CypherValue::Null,
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "list_value" | "make_list" | "list_creation" => {
+            let mut result = Vec::with_capacity(args.len());
+            for arg in args {
+                result.push(eval_with_params(arg, record, params, storage)?);
+            }
+            CypherValue::List(result)
         }
         "range" => {
             match args.len() {
@@ -1523,6 +1713,283 @@ fn eval_function(
         }
         "cot" => math_fn_1_f64(args, record, params, storage, |x| 1.0 / x.tan())?,
         "haversin" => math_fn_1_f64(args, record, params, storage, |x| (1.0 - x.cos()) / 2.0)?,
+        // --- Date / Timestamp functions ---
+        "current_date" => CypherValue::Date(Utc::now().date_naive()),
+        "current_timestamp" => CypherValue::Timestamp(Utc::now()),
+        "make_date" => {
+            if args.len() >= 3 {
+                let year = eval_with_params(&args[0], record, params, storage)?;
+                let month = eval_with_params(&args[1], record, params, storage)?;
+                let day = eval_with_params(&args[2], record, params, storage)?;
+                match (&year, &month, &day) {
+                    (CypherValue::Integer(y), CypherValue::Integer(m), CypherValue::Integer(d)) => {
+                        NaiveDate::from_ymd_opt(*y as i32, *m as u32, *d as u32)
+                            .map(CypherValue::Date)
+                            .unwrap_or(CypherValue::Null)
+                    }
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "date" | "cast_to_date" => {
+            if let Some(arg) = args.first() {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match &val {
+                    CypherValue::Date(_) => val,
+                    CypherValue::String(s) => s
+                        .parse::<NaiveDate>()
+                        .map(CypherValue::Date)
+                        .unwrap_or(CypherValue::Null),
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "to_timestamp" => {
+            if let Some(arg) = args.first() {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match &val {
+                    CypherValue::Integer(secs) => Utc
+                        .timestamp_opt(*secs, 0)
+                        .single()
+                        .map(CypherValue::Timestamp)
+                        .unwrap_or(CypherValue::Null),
+                    CypherValue::Float(secs) => {
+                        let whole = *secs as i64;
+                        let nanos = ((*secs - whole as f64) * 1_000_000_000.0) as u32;
+                        Utc.timestamp_opt(whole, nanos)
+                            .single()
+                            .map(CypherValue::Timestamp)
+                            .unwrap_or(CypherValue::Null)
+                    }
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "epoch_ms" => {
+            if let Some(arg) = args.first() {
+                let val = eval_with_params(arg, record, params, storage)?;
+                match &val {
+                    CypherValue::Timestamp(ts) => CypherValue::Integer(ts.timestamp_millis()),
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "date_part" => {
+            if args.len() >= 2 {
+                let part = eval_with_params(&args[0], record, params, storage)?;
+                let dt = eval_with_params(&args[1], record, params, storage)?;
+                match &part {
+                    CypherValue::String(p) => {
+                        let p_lower = p.to_lowercase();
+                        match (&dt, p_lower.as_str()) {
+                            (CypherValue::Date(d), "year") => CypherValue::Integer(d.year() as i64),
+                            (CypherValue::Date(d), "month") => {
+                                CypherValue::Integer(d.month() as i64)
+                            }
+                            (CypherValue::Date(d), "day") => CypherValue::Integer(d.day() as i64),
+                            (CypherValue::Timestamp(ts), "year") => {
+                                CypherValue::Integer(ts.year() as i64)
+                            }
+                            (CypherValue::Timestamp(ts), "month") => {
+                                CypherValue::Integer(ts.month() as i64)
+                            }
+                            (CypherValue::Timestamp(ts), "day") => {
+                                CypherValue::Integer(ts.day() as i64)
+                            }
+                            (CypherValue::Timestamp(ts), "hour") => {
+                                CypherValue::Integer(ts.hour() as i64)
+                            }
+                            (CypherValue::Timestamp(ts), "minute") => {
+                                CypherValue::Integer(ts.minute() as i64)
+                            }
+                            (CypherValue::Timestamp(ts), "second") => {
+                                CypherValue::Integer(ts.second() as i64)
+                            }
+                            (CypherValue::Timestamp(ts), "epoch") => {
+                                CypherValue::Integer(ts.timestamp())
+                            }
+                            _ => CypherValue::Null,
+                        }
+                    }
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "date_trunc" => {
+            if args.len() >= 2 {
+                let part = eval_with_params(&args[0], record, params, storage)?;
+                let dt = eval_with_params(&args[1], record, params, storage)?;
+                match (&part, &dt) {
+                    (CypherValue::String(p), CypherValue::Timestamp(ts)) => {
+                        let truncated = match p.to_lowercase().as_str() {
+                            "year" => Utc.with_ymd_and_hms(ts.year(), 1, 1, 0, 0, 0).single(),
+                            "month" => Utc
+                                .with_ymd_and_hms(ts.year(), ts.month(), 1, 0, 0, 0)
+                                .single(),
+                            "day" => Utc
+                                .with_ymd_and_hms(ts.year(), ts.month(), ts.day(), 0, 0, 0)
+                                .single(),
+                            "hour" => Utc
+                                .with_ymd_and_hms(ts.year(), ts.month(), ts.day(), ts.hour(), 0, 0)
+                                .single(),
+                            "minute" => Utc
+                                .with_ymd_and_hms(
+                                    ts.year(),
+                                    ts.month(),
+                                    ts.day(),
+                                    ts.hour(),
+                                    ts.minute(),
+                                    0,
+                                )
+                                .single(),
+                            _ => None,
+                        };
+                        truncated
+                            .map(CypherValue::Timestamp)
+                            .unwrap_or(CypherValue::Null)
+                    }
+                    (CypherValue::String(p), CypherValue::Date(d)) => {
+                        let truncated = match p.to_lowercase().as_str() {
+                            "year" => NaiveDate::from_ymd_opt(d.year(), 1, 1),
+                            "month" => NaiveDate::from_ymd_opt(d.year(), d.month(), 1),
+                            "day" => Some(*d),
+                            _ => None,
+                        };
+                        truncated
+                            .map(CypherValue::Date)
+                            .unwrap_or(CypherValue::Null)
+                    }
+                    _ => CypherValue::Null,
+                }
+            } else {
+                CypherValue::Null
+            }
+        }
+        "show_functions" => {
+            const FUNCTION_NAMES: &[&str] = &[
+                "abs",
+                "acos",
+                "array_append",
+                "array_contains",
+                "array_distinct",
+                "array_extract",
+                "array_prepend",
+                "array_sort",
+                "asin",
+                "atan",
+                "atan2",
+                "cast_to_date",
+                "cast_to_double",
+                "cast_to_int64",
+                "cast_to_string",
+                "ceil",
+                "coalesce",
+                "collect",
+                "concat",
+                "cos",
+                "cot",
+                "count",
+                "current_date",
+                "current_timestamp",
+                "date",
+                "date_part",
+                "date_trunc",
+                "degrees",
+                "double",
+                "e",
+                "endnode",
+                "epoch_ms",
+                "exists",
+                "exp",
+                "floor",
+                "haversin",
+                "head",
+                "id",
+                "int64",
+                "keys",
+                "labels",
+                "last",
+                "left",
+                "length",
+                "list_append",
+                "list_contains",
+                "list_creation",
+                "list_distinct",
+                "list_extract",
+                "list_has",
+                "list_prepend",
+                "list_push_back",
+                "list_push_front",
+                "list_sort",
+                "list_value",
+                "log",
+                "log10",
+                "lower",
+                "ltrim",
+                "make_date",
+                "make_list",
+                "max",
+                "min",
+                "nodes",
+                "percentilecont",
+                "percentiledisc",
+                "pi",
+                "properties",
+                "radians",
+                "rand",
+                "randomuuid",
+                "range",
+                "regexp_extract",
+                "regexp_matches",
+                "regexp_replace",
+                "relationships",
+                "rels",
+                "replace",
+                "reverse",
+                "right",
+                "round",
+                "rtrim",
+                "show_functions",
+                "sign",
+                "sin",
+                "size",
+                "split",
+                "sqrt",
+                "startnode",
+                "stdev",
+                "stdevp",
+                "string",
+                "substring",
+                "sum",
+                "tail",
+                "tan",
+                "toboolean",
+                "tofloat",
+                "toint",
+                "tointeger",
+                "to_timestamp",
+                "tostring",
+                "trim",
+                "type",
+                "upper",
+            ];
+            CypherValue::List(
+                FUNCTION_NAMES
+                    .iter()
+                    .map(|s| CypherValue::String(s.to_string()))
+                    .collect(),
+            )
+        }
         _ => CypherValue::Null,
     })
 }
@@ -1646,6 +2113,8 @@ pub fn cypher_value_to_string(val: &CypherValue) -> String {
         CypherValue::Node(n) => format!("Node({})", n.id),
         CypherValue::Relationship(e) => format!("Relationship({})", e.id),
         CypherValue::Path(_) => "Path(...)".to_string(),
+        CypherValue::Date(d) => d.to_string(),
+        CypherValue::Timestamp(ts) => ts.to_rfc3339(),
     }
 }
 
@@ -1709,6 +2178,8 @@ pub fn cypher_value_to_stable_key(val: &CypherValue) -> String {
             let node_ids: Vec<String> = p.nodes.iter().map(|n| n.id.to_string()).collect();
             format!("P:[{}]", node_ids.join(","))
         }
+        CypherValue::Date(d) => format!("D:{}", d),
+        CypherValue::Timestamp(ts) => format!("T:{}", ts.timestamp_millis()),
     }
 }
 

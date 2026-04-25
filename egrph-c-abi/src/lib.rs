@@ -156,6 +156,8 @@ fn cypher_value_to_json(val: &egrph_core::CypherValue) -> serde_json::Value {
             })
         }
         egrph_core::CypherValue::Path(_) => serde_json::Value::String("Path(...)".to_string()),
+        egrph_core::CypherValue::Date(d) => serde_json::Value::String(d.to_string()),
+        egrph_core::CypherValue::Timestamp(ts) => serde_json::Value::String(ts.to_rfc3339()),
     }
 }
 
