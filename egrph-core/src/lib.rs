@@ -3083,6 +3083,26 @@ mod tests {
     }
 
     #[test]
+    fn test_block_comment() {
+        let mut g = Graph::new();
+        // Block comment before and after CREATE
+        g.execute("/* create a person */ CREATE (:Person {name:'Alice'}) /* done */")
+            .unwrap();
+
+        // Block comment inside MATCH/RETURN
+        let result = g
+            .execute("MATCH (p:Person) /* find all */ RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+
+        // Multiline block comment
+        let result = g
+            .execute("/* line1\n   line2 */ MATCH (p:Person) RETURN p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
     fn test_undirected_var_length() {
         // (a)-[*1..2]-(b) undirected variable-length
         let mut g = Graph::new();

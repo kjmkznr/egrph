@@ -1,5 +1,5 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 
 // Top-level statement: DDL or one or more queries joined by UNION / UNION ALL
 statement = { SOI ~ (create_constraint_stmt | query ~ (union_op ~ query)*) ~ EOI }
