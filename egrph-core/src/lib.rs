@@ -2819,4 +2819,118 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert_ne!(result.rows[0].values[0], result.rows[0].values[1]);
     }
+
+    // --- Undirected edge tests ---
+
+    #[test]
+    fn test_undirected_match_no_bracket() {
+        // (a)--(b) should match both directions
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})-[:KNOWS]->(:Person {name:'Bob'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH (a:Person)--(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        // Alice→Bob and Bob←Alice both appear
+        assert_eq!(result.rows.len(), 2);
+        let mut names: Vec<(String, String)> = result
+            .rows
+            .iter()
+            .map(|r| {
+                let a = match &r.values[0] {
+                    CypherValue::String(s) => s.clone(),
+                    _ => panic!("expected string"),
+                };
+                let b = match &r.values[1] {
+                    CypherValue::String(s) => s.clone(),
+                    _ => panic!("expected string"),
+                };
+                (a, b)
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                ("Alice".to_string(), "Bob".to_string()),
+                ("Bob".to_string(), "Alice".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_undirected_match_with_rel_variable() {
+        // (a)-[r]-(b) should match undirected, return relationship
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})-[:KNOWS]->(:Person {name:'Bob'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH (a:Person)-[r]-(b:Person) RETURN a.name, type(r), b.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            assert_eq!(row.values[1], CypherValue::String("KNOWS".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_undirected_match_with_rel_type() {
+        // (a)-[:TYPE]-(b) undirected match with type filter
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})-[:KNOWS]->(:Person {name:'Bob'})")
+            .unwrap();
+        g.execute("CREATE (:Person {name:'Carol'})-[:LIKES]->(:Person {name:'Dave'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH (a:Person)-[:KNOWS]-(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        // Only KNOWS edges, both directions
+        assert_eq!(result.rows.len(), 2);
+        let mut names: Vec<String> = result
+            .rows
+            .iter()
+            .flat_map(|r| {
+                r.values.iter().map(|v| match v {
+                    CypherValue::String(s) => s.clone(),
+                    _ => panic!("expected string"),
+                })
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names, vec!["Alice".to_string(), "Bob".to_string()]);
+    }
+
+    #[test]
+    fn test_undirected_no_self_loop_on_single_node() {
+        // A node with no edges should return no rows for undirected match
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Isolated'})").unwrap();
+        let result = g
+            .execute("MATCH (a:Person)--(b:Person) RETURN a.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_undirected_var_length() {
+        // (a)-[*1..2]-(b) undirected variable-length
+        let mut g = Graph::new();
+        g.execute("CREATE (:Node {id:1})-[:LINK]->(:Node {id:2})-[:LINK]->(:Node {id:3})")
+            .unwrap();
+        let result = g
+            .execute("MATCH (a:Node {id:1})-[*1..2]-(b:Node) RETURN b.id")
+            .unwrap();
+        // From node 1: hop1 → node2, hop2 → node3; also back from node2 to node1 but a≠b check not enforced
+        let ids: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|r| match &r.values[0] {
+                CypherValue::Integer(i) => *i,
+                _ => panic!("expected integer"),
+            })
+            .collect();
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&3));
+    }
 }
