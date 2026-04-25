@@ -141,6 +141,15 @@ pub enum LogicalPlan {
         max_hops: Option<u64>,
     },
 
+    /// LOAD CSV: read a CSV file and produce one row per record.
+    LoadCsv {
+        input: Box<LogicalPlan>,
+        url: Expression,
+        alias: String,
+        with_headers: bool,
+        field_terminator: Option<Expression>,
+    },
+
     /// UNION / UNION ALL: combine results of two sub-plans.
     Union {
         left: Box<LogicalPlan>,

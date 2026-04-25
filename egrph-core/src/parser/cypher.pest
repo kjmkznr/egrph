@@ -37,6 +37,7 @@ clause = {
   | return_clause
   | with_clause
   | unwind_clause
+  | load_csv_clause
   | merge_clause
   | set_clause
   | remove_clause
@@ -72,6 +73,17 @@ with_clause = {
 
 // --- UNWIND ---
 unwind_clause = { ^"UNWIND" ~ expression ~ ^"AS" ~ variable }
+
+// --- LOAD CSV ---
+load_csv_clause = {
+    load_kw ~ csv_kw ~ load_csv_with_headers? ~ from_kw ~ expression ~ ^"AS" ~ variable
+    ~ (fieldterminator_kw ~ expression)?
+}
+load_csv_with_headers = { ^"WITH" ~ ^"HEADERS" }
+load_kw            = @{ ^"LOAD" ~ !ASCII_ALPHANUMERIC }
+csv_kw             = @{ ^"CSV" ~ !ASCII_ALPHANUMERIC }
+from_kw            = @{ ^"FROM" ~ !ASCII_ALPHANUMERIC }
+fieldterminator_kw = @{ ^"FIELDTERMINATOR" ~ !ASCII_ALPHANUMERIC }
 
 // --- SET ---
 set_clause = { ^"SET" ~ set_item ~ ("," ~ set_item)* }

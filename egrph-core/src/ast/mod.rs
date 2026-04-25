@@ -50,6 +50,7 @@ pub enum Clause {
     Where(WhereClause),
     With(WithClause),
     Unwind(UnwindClause),
+    LoadCsv(LoadCsvClause),
     Set(SetClause),
     Remove(RemoveClause),
     Delete(DeleteClause),
@@ -97,6 +98,19 @@ pub struct WithClause {
 pub struct UnwindClause {
     pub expression: Expression,
     pub alias: String,
+}
+
+/// LOAD CSV clause: reads a CSV file and produces one row per CSV record.
+#[derive(Debug, Clone)]
+pub struct LoadCsvClause {
+    /// URL or file path expression (typically a string literal or $parameter).
+    pub url: Expression,
+    /// Variable name to bind each row.
+    pub alias: String,
+    /// When true, the first row is treated as a header and each row is a map.
+    pub with_headers: bool,
+    /// Optional field terminator expression (single-character string).
+    pub field_terminator: Option<Expression>,
 }
 
 /// SET clause: sets properties or labels on nodes/relationships.

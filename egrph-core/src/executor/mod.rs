@@ -412,6 +412,22 @@ fn execute_to_records<S: StorageBackend>(
             alias,
         } => execute_unwind(input, expression, alias, storage, params),
 
+        LogicalPlan::LoadCsv {
+            input,
+            url,
+            alias,
+            with_headers,
+            field_terminator,
+        } => execute_load_csv(
+            input,
+            url,
+            alias,
+            *with_headers,
+            field_terminator.as_ref(),
+            storage,
+            params,
+        ),
+
         LogicalPlan::SetOp { input, items } => execute_set(input, items, storage, params),
 
         LogicalPlan::RemoveOp { input, items } => execute_remove(input, items, storage, params),
@@ -1063,6 +1079,140 @@ fn execute_unwind<S: StorageBackend>(
                     "Type mismatch: expected List but was {}",
                     cypher_value_type_name(&other)
                 )));
+            }
+        }
+    }
+
+    Ok((cols, result_records))
+}
+
+fn execute_load_csv<S: StorageBackend>(
+    input: &LogicalPlan,
+    url: &Expression,
+    alias: &str,
+    with_headers: bool,
+    field_terminator: Option<&Expression>,
+    storage: &mut S,
+    params: &Parameters,
+) -> Result<(Vec<String>, Vec<Record>), CypherError> {
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
+
+    if !cols.contains(&alias.to_string()) {
+        cols.push(alias.to_string());
+    }
+
+    let mut result_records = Vec::new();
+
+    for rec in input_records {
+        // Evaluate URL expression
+        let url_val = eval_with_params(url, &rec, params, storage)?;
+        let url_str = match url_val {
+            CypherValue::String(s) => s,
+            other => {
+                return Err(CypherError::TypeError(format!(
+                    "LOAD CSV: URL must be a string, got {}",
+                    cypher_value_type_name(&other)
+                )));
+            }
+        };
+
+        // Resolve filesystem path from URL
+        // Supports "file:///path" → "/path"  and bare paths
+        let file_path = if let Some(rest) = url_str.strip_prefix("file://") {
+            rest.to_string()
+        } else {
+            url_str.clone()
+        };
+
+        // Determine field terminator (default: comma)
+        let delimiter: u8 = if let Some(ft_expr) = field_terminator {
+            let ft_val = eval_with_params(ft_expr, &rec, params, storage)?;
+            match ft_val {
+                CypherValue::String(s) => {
+                    let ch = s.chars().next().ok_or_else(|| {
+                        CypherError::RuntimeError(
+                            "LOAD CSV: FIELDTERMINATOR must not be empty".to_string(),
+                        )
+                    })?;
+                    if !ch.is_ascii() {
+                        return Err(CypherError::RuntimeError(
+                            "LOAD CSV: FIELDTERMINATOR must be an ASCII character".to_string(),
+                        ));
+                    }
+                    ch as u8
+                }
+                other => {
+                    return Err(CypherError::TypeError(format!(
+                        "LOAD CSV: FIELDTERMINATOR must be a string, got {}",
+                        cypher_value_type_name(&other)
+                    )));
+                }
+            }
+        } else {
+            b','
+        };
+
+        // Open and parse CSV file
+        let file = std::fs::File::open(&file_path).map_err(|e| {
+            CypherError::RuntimeError(format!("LOAD CSV: cannot open '{}': {}", file_path, e))
+        })?;
+
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(with_headers)
+            .delimiter(delimiter)
+            .from_reader(file);
+
+        // Collect rows; when with_headers, the csv reader exposes headers separately
+        if with_headers {
+            let headers: Vec<String> = reader
+                .headers()
+                .map_err(|e| {
+                    CypherError::RuntimeError(format!("LOAD CSV: failed to read headers: {}", e))
+                })?
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            for result in reader.records() {
+                let csv_rec = result.map_err(|e| {
+                    CypherError::RuntimeError(format!("LOAD CSV: failed to read record: {}", e))
+                })?;
+
+                let mut map: HashMap<String, CypherValue> = HashMap::new();
+                for (i, field) in csv_rec.iter().enumerate() {
+                    let key = headers.get(i).cloned().unwrap_or_else(|| i.to_string());
+                    let val = if field.is_empty() {
+                        CypherValue::Null
+                    } else {
+                        CypherValue::String(field.to_string())
+                    };
+                    map.insert(key, val);
+                }
+
+                let mut new_rec = rec.clone();
+                new_rec.insert(alias.to_string(), CypherValue::Map(map));
+                result_records.push(new_rec);
+            }
+        } else {
+            for result in reader.records() {
+                let csv_rec = result.map_err(|e| {
+                    CypherError::RuntimeError(format!("LOAD CSV: failed to read record: {}", e))
+                })?;
+
+                let list: Vec<CypherValue> = csv_rec
+                    .iter()
+                    .map(|f| {
+                        if f.is_empty() {
+                            CypherValue::Null
+                        } else {
+                            CypherValue::String(f.to_string())
+                        }
+                    })
+                    .collect();
+
+                let mut new_rec = rec.clone();
+                new_rec.insert(alias.to_string(), CypherValue::List(list));
+                result_records.push(new_rec);
             }
         }
     }

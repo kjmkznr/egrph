@@ -94,6 +94,9 @@ fn parse_clause(
         Rule::unwind_clause => {
             clauses.push(parse_unwind_clause(inner)?);
         }
+        Rule::load_csv_clause => {
+            clauses.push(parse_load_csv_clause(inner)?);
+        }
         Rule::set_clause => {
             clauses.push(parse_set_clause(inner)?);
         }
@@ -363,6 +366,62 @@ fn parse_with_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cypher
         skip,
         limit,
         where_clause: where_expr,
+    }))
+}
+
+fn parse_load_csv_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, CypherError> {
+    use crate::ast::LoadCsvClause;
+
+    let mut with_headers = false;
+    let mut url_expr: Option<Expression> = None;
+    let mut alias: Option<String> = None;
+    let mut field_terminator: Option<Expression> = None;
+
+    // States: before FROM expression, then AS variable, then optional FIELDTERMINATOR expression
+    enum State {
+        Url,
+        Alias,
+        FieldTerminator,
+    }
+    let mut state = State::Url;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::load_kw | Rule::csv_kw | Rule::from_kw => {}
+            Rule::load_csv_with_headers => {
+                with_headers = true;
+            }
+            Rule::fieldterminator_kw => {
+                state = State::FieldTerminator;
+            }
+            Rule::expression => {
+                let expr = parse_expression(inner)?;
+                match state {
+                    State::Url => {
+                        url_expr = Some(expr);
+                        state = State::Alias;
+                    }
+                    State::FieldTerminator => {
+                        field_terminator = Some(expr);
+                    }
+                    State::Alias => {}
+                }
+            }
+            Rule::variable => {
+                alias = Some(inner.as_str().to_string());
+                state = State::Alias;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Clause::LoadCsv(LoadCsvClause {
+        url: url_expr
+            .ok_or_else(|| CypherError::ParseError("Missing URL in LOAD CSV".to_string()))?,
+        alias: alias
+            .ok_or_else(|| CypherError::ParseError("Missing alias in LOAD CSV".to_string()))?,
+        with_headers,
+        field_terminator,
     }))
 }
 

@@ -38,6 +38,7 @@ fn plan_clause(clause: &Clause, input: LogicalPlan) -> Result<LogicalPlan, Cyphe
         Clause::Where(where_clause) => plan_where(where_clause, input),
         Clause::With(with_clause) => plan_with(with_clause, input),
         Clause::Unwind(unwind_clause) => plan_unwind(unwind_clause, input),
+        Clause::LoadCsv(load_csv_clause) => plan_load_csv(load_csv_clause, input),
         Clause::Set(set_clause) => plan_set(set_clause, input),
         Clause::Remove(remove_clause) => plan_remove(remove_clause, input),
         Clause::Delete(delete_clause) => plan_delete(delete_clause, input),
@@ -438,6 +439,19 @@ fn plan_with(with_clause: &WithClause, input: LogicalPlan) -> Result<LogicalPlan
     }
 
     Ok(current)
+}
+
+fn plan_load_csv(
+    load_csv_clause: &crate::ast::LoadCsvClause,
+    input: LogicalPlan,
+) -> Result<LogicalPlan, CypherError> {
+    Ok(LogicalPlan::LoadCsv {
+        input: Box::new(input),
+        url: load_csv_clause.url.clone(),
+        alias: load_csv_clause.alias.clone(),
+        with_headers: load_csv_clause.with_headers,
+        field_terminator: load_csv_clause.field_terminator.clone(),
+    })
 }
 
 fn plan_unwind(

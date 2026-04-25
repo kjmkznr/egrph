@@ -3265,4 +3265,151 @@ mod tests {
             other => panic!("expected Map, got {:?}", other),
         }
     }
+
+    // --- LOAD CSV tests ---
+
+    #[test]
+    fn test_load_csv_without_headers() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "Alice,30").unwrap();
+        writeln!(tmp, "Bob,25").unwrap();
+        tmp.flush().unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let query = format!("LOAD CSV FROM '{}' AS row RETURN row", path);
+        let mut g = Graph::new();
+        let result = g.execute(&query).unwrap();
+        assert_eq!(result.rows.len(), 2);
+        match &result.rows[0].values[0] {
+            CypherValue::List(items) => {
+                assert_eq!(items[0], CypherValue::String("Alice".to_string()));
+                assert_eq!(items[1], CypherValue::String("30".to_string()));
+            }
+            other => panic!("expected List, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_csv_with_headers() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "name,age").unwrap();
+        writeln!(tmp, "Alice,30").unwrap();
+        writeln!(tmp, "Bob,25").unwrap();
+        tmp.flush().unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row RETURN row.name, row.age",
+            path
+        );
+        let mut g = Graph::new();
+        let result = g.execute(&query).unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(
+            result.rows[0].values[1],
+            CypherValue::String("30".to_string())
+        );
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_load_csv_create_nodes() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "name,age").unwrap();
+        writeln!(tmp, "Alice,30").unwrap();
+        writeln!(tmp, "Bob,25").unwrap();
+        tmp.flush().unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row CREATE (:Person {{name: row.name}})",
+            path
+        );
+        let mut g = Graph::new();
+        g.execute(&query).unwrap();
+        assert_eq!(g.node_count(), 2);
+
+        let result = g
+            .execute("MATCH (p:Person) RETURN p.name ORDER BY p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(
+            result.rows[1].values[0],
+            CypherValue::String("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn test_load_csv_custom_delimiter() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "name;age").unwrap();
+        writeln!(tmp, "Alice;30").unwrap();
+        tmp.flush().unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row FIELDTERMINATOR ';' RETURN row.name",
+            path
+        );
+        let mut g = Graph::new();
+        let result = g.execute(&query).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_load_csv_empty_field_becomes_null() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "name,age").unwrap();
+        writeln!(tmp, "Alice,").unwrap();
+        tmp.flush().unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row RETURN row.name, row.age",
+            path
+        );
+        let mut g = Graph::new();
+        let result = g.execute(&query).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(result.rows[0].values[1], CypherValue::Null);
+    }
+
+    #[test]
+    fn test_load_csv_file_url_scheme() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "x").unwrap();
+        tmp.flush().unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let url = format!("file://{}", path);
+        let query = format!("LOAD CSV FROM '{}' AS row RETURN row", url);
+        let mut g = Graph::new();
+        let result = g.execute(&query).unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
 }
