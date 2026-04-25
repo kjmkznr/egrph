@@ -915,6 +915,104 @@ mod tests {
     }
 
     #[test]
+    fn test_return_distinct_scalar() {
+        // Basic RETURN DISTINCT deduplicates identical scalar values
+        let mut g = Graph::new();
+        g.execute("CREATE (:Item {category: \"A\", val: 1})")
+            .unwrap();
+        g.execute("CREATE (:Item {category: \"A\", val: 2})")
+            .unwrap();
+        g.execute("CREATE (:Item {category: \"B\", val: 3})")
+            .unwrap();
+
+        let result = g
+            .execute("MATCH (n:Item) RETURN DISTINCT n.category AS cat ORDER BY cat")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        match &result.rows[0].values[0] {
+            CypherValue::String(s) => assert_eq!(s, "A"),
+            other => panic!("Expected String, got {:?}", other),
+        }
+        match &result.rows[1].values[0] {
+            CypherValue::String(s) => assert_eq!(s, "B"),
+            other => panic!("Expected String, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_return_distinct_multiple_columns() {
+        // RETURN DISTINCT on multiple columns: uniqueness is per combination
+        let mut g = Graph::new();
+        g.execute("CREATE (:P {a: 1, b: 2})").unwrap();
+        g.execute("CREATE (:P {a: 1, b: 2})").unwrap(); // duplicate
+        g.execute("CREATE (:P {a: 1, b: 3})").unwrap(); // different b
+        g.execute("CREATE (:P {a: 2, b: 2})").unwrap(); // different a
+
+        let result = g
+            .execute("MATCH (n:P) RETURN DISTINCT n.a AS a, n.b AS b ORDER BY a, b")
+            .unwrap();
+        // Expected unique (a,b) pairs: (1,2), (1,3), (2,2)
+        assert_eq!(result.rows.len(), 3);
+    }
+
+    #[test]
+    fn test_return_distinct_all_unique() {
+        // When all rows are already unique, RETURN DISTINCT should not drop any
+        let mut g = Graph::new();
+        g.execute("CREATE (:X {v: 1})").unwrap();
+        g.execute("CREATE (:X {v: 2})").unwrap();
+        g.execute("CREATE (:X {v: 3})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:X) RETURN DISTINCT n.v AS v ORDER BY v")
+            .unwrap();
+        assert_eq!(result.rows.len(), 3);
+    }
+
+    #[test]
+    fn test_return_distinct_with_order_by_alias() {
+        // RETURN DISTINCT + ORDER BY referencing the projected alias
+        let mut g = Graph::new();
+        g.execute("CREATE (:N {x: 3})").unwrap();
+        g.execute("CREATE (:N {x: 1})").unwrap();
+        g.execute("CREATE (:N {x: 1})").unwrap();
+        g.execute("CREATE (:N {x: 2})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:N) RETURN DISTINCT n.x AS x ORDER BY x")
+            .unwrap();
+        assert_eq!(result.rows.len(), 3);
+        let values: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|r| match &r.values[0] {
+                CypherValue::Integer(i) => *i,
+                other => panic!("Expected Integer, got {:?}", other),
+            })
+            .collect();
+        assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_return_distinct_with_limit() {
+        // RETURN DISTINCT + LIMIT applies after deduplication
+        let mut g = Graph::new();
+        for _ in 0..5 {
+            g.execute("CREATE (:M {v: 1})").unwrap();
+        }
+        g.execute("CREATE (:M {v: 2})").unwrap();
+
+        let result = g
+            .execute("MATCH (n:M) RETURN DISTINCT n.v AS v ORDER BY v LIMIT 1")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Integer(i) => assert_eq!(*i, 1),
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_unwind_list() {
         let mut g = Graph::new();
         g.execute("CREATE (:Data {val: 1})").unwrap();
