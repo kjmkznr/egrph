@@ -23,6 +23,12 @@ pub struct WasmGraph {
     inner: Graph,
 }
 
+impl Default for WasmGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl WasmGraph {
     #[wasm_bindgen(constructor)]
