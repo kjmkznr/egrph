@@ -1450,14 +1450,6 @@ fn execute_merge<S: StorageBackend>(
             }
 
             let labels = np.labels.clone();
-            let empty_rec = Record::new();
-            let properties =
-                resolve_map_literal_to_properties(&np.properties, &empty_rec, params, storage)?;
-
-            // Find all existing nodes matching labels and properties.
-            // MERGE runs ON MATCH for every matching node (not just the first),
-            // and ON CREATE only when no match exists at all.
-            let existing_ids = storage.find_nodes(&labels, &properties);
 
             let base_records = if input_records.is_empty() {
                 vec![Record::new()]
@@ -1467,46 +1459,51 @@ fn execute_merge<S: StorageBackend>(
 
             let mut result_records = Vec::new();
 
-            if existing_ids.is_empty() {
-                // Not found — create one node and apply ON CREATE SET
-                let node_id = storage.create_node(labels, properties);
-                let node = storage
-                    .get_node(node_id)
-                    .ok_or_else(|| {
-                        CypherError::RuntimeError("Newly created node not found".to_string())
-                    })?
-                    .clone();
-                for mut rec in base_records {
-                    rec.insert(variable.clone(), CypherValue::Node(node.clone()));
-                    result_records.push(rec);
-                }
-                if let Some(items) = on_create {
-                    for rec in &mut result_records {
-                        for item in items {
-                            apply_set_item(item, rec, storage, params)?;
-                        }
-                    }
-                }
-            } else {
-                // Found — produce one output row per matched node and apply ON MATCH SET
-                for node_id in existing_ids {
+            // Resolve properties per input record so that bound variables
+            // (e.g. from LOAD CSV or WITH) are evaluated correctly.
+            for base_rec in base_records {
+                let properties = resolve_map_literal_to_properties(
+                    &np.properties,
+                    &base_rec,
+                    params,
+                    storage,
+                )?;
+                let existing_ids = storage.find_nodes(&labels, &properties);
+
+                if existing_ids.is_empty() {
+                    // Not found — create one node and apply ON CREATE SET
+                    let node_id = storage.create_node(labels.clone(), properties);
                     let node = storage
                         .get_node(node_id)
                         .ok_or_else(|| {
-                            CypherError::RuntimeError("Merged node not found".to_string())
+                            CypherError::RuntimeError("Newly created node not found".to_string())
                         })?
                         .clone();
-                    for base_rec in &base_records {
-                        let mut rec = base_rec.clone();
-                        rec.insert(variable.clone(), CypherValue::Node(node.clone()));
-                        result_records.push(rec);
-                    }
-                }
-                if let Some(items) = on_match {
-                    for rec in &mut result_records {
+                    let mut rec = base_rec;
+                    rec.insert(variable.clone(), CypherValue::Node(node));
+                    if let Some(items) = on_create {
                         for item in items {
-                            apply_set_item(item, rec, storage, params)?;
+                            apply_set_item(item, &mut rec, storage, params)?;
                         }
+                    }
+                    result_records.push(rec);
+                } else {
+                    // Found — produce one output row per matched node and apply ON MATCH SET
+                    for node_id in existing_ids {
+                        let node = storage
+                            .get_node(node_id)
+                            .ok_or_else(|| {
+                                CypherError::RuntimeError("Merged node not found".to_string())
+                            })?
+                            .clone();
+                        let mut rec = base_rec.clone();
+                        rec.insert(variable.clone(), CypherValue::Node(node));
+                        if let Some(items) = on_match {
+                            for item in items {
+                                apply_set_item(item, &mut rec, storage, params)?;
+                            }
+                        }
+                        result_records.push(rec);
                     }
                 }
             }

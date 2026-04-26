@@ -1516,6 +1516,34 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_node_with_bound_variable() {
+        // MERGE (n {prop: var}) where var comes from an upstream clause must
+        // resolve the variable per input row, not against an empty record.
+        let mut g = Graph::new();
+        let result = g
+            .execute("WITH 'Alice' AS name MERGE (n:Person {name: name}) RETURN n.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+        assert_eq!(g.node_count(), 1);
+
+        // Second run must match the existing node, not create a duplicate.
+        let result2 = g
+            .execute("WITH 'Alice' AS name MERGE (n:Person {name: name}) RETURN n.name")
+            .unwrap();
+        assert_eq!(result2.rows.len(), 1);
+        assert_eq!(g.node_count(), 1);
+
+        // Different value must create a distinct node.
+        g.execute("WITH 'Bob' AS name MERGE (n:Person {name: name}) RETURN n.name")
+            .unwrap();
+        assert_eq!(g.node_count(), 2);
+    }
+
+    #[test]
     fn test_delete_relationship() {
         let mut g = Graph::new();
         g.execute("CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})")
