@@ -46,8 +46,9 @@ clause = {
 }
 
 // --- MATCH ---
-match_clause = { optional_match | regular_match }
+match_clause = { optional_match | mandatory_match | regular_match }
 optional_match = { ^"OPTIONAL" ~ ^"MATCH" ~ pattern_list }
+mandatory_match = { ^"MANDATORY" ~ ^"MATCH" ~ pattern_list }
 regular_match = { ^"MATCH" ~ pattern_list }
 
 // --- CREATE ---
@@ -286,7 +287,7 @@ reserved_word = {
   | ^"DISTINCT" | ^"IS" | ^"IN" | ^"STARTS" | ^"ENDS" | ^"CONTAINS"
   | ^"CASE" | ^"WHEN" | ^"THEN" | ^"ELSE" | ^"END"
   | ^"WITH" | ^"UNWIND" | ^"SET" | ^"REMOVE" | ^"DELETE" | ^"DETACH"
-  | ^"MERGE" | ^"ON"
+  | ^"MERGE" | ^"ON" | ^"MANDATORY"
   | ^"REDUCE" | ^"ANY" | ^"ALL" | ^"NONE" | ^"SINGLE"
   | ^"UNION"
   | ^"CONSTRAINT" | ^"REQUIRE" | ^"UNIQUE"

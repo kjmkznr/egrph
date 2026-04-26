@@ -89,20 +89,25 @@ fn plan_match(match_clause: &MatchClause, input: LogicalPlan) -> Result<LogicalP
     let mut current = input;
     for (part_idx, part) in match_clause.pattern.parts.iter().enumerate() {
         let scan_plan = plan_match_scan(part, part_idx)?;
-        if match_clause.optional {
-            current = LogicalPlan::LeftOuterJoin {
+        current = match match_clause.kind {
+            MatchKind::Optional => LogicalPlan::LeftOuterJoin {
                 left: Box::new(current),
                 right: Box::new(scan_plan),
-            };
-        } else {
-            current = match current {
+            },
+            MatchKind::Regular | MatchKind::Mandatory => match current {
                 LogicalPlan::EmptyRow => scan_plan,
                 other => LogicalPlan::CartesianProduct {
                     left: Box::new(other),
                     right: Box::new(scan_plan),
                 },
-            };
-        }
+            },
+        };
+    }
+
+    if match_clause.kind == MatchKind::Mandatory {
+        current = LogicalPlan::MandatoryGuard {
+            input: Box::new(current),
+        };
     }
 
     Ok(current)

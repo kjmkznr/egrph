@@ -62,10 +62,17 @@ pub struct CreateClause {
     pub pattern: Pattern,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    Regular,
+    Optional,
+    Mandatory,
+}
+
 #[derive(Debug, Clone)]
 pub struct MatchClause {
     pub pattern: Pattern,
-    pub optional: bool,
+    pub kind: MatchKind,
 }
 
 #[derive(Debug, Clone)]

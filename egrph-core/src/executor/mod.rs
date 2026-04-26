@@ -521,6 +521,16 @@ fn execute_to_records<S: StorageBackend>(
             Ok((cols, acc_records))
         }
 
+        LogicalPlan::MandatoryGuard { input } => {
+            let (cols, records) = execute_to_records(input, storage, params)?;
+            if records.is_empty() {
+                return Err(CypherError::RuntimeError(
+                    "MANDATORY MATCH pattern matched zero rows".to_string(),
+                ));
+            }
+            Ok((cols, records))
+        }
+
         LogicalPlan::LeftOuterJoin { left, right } => {
             let (left_cols, left_records) = execute_to_records(left, storage, params)?;
             let (right_cols, right_records) = execute_to_records(right, storage, params)?;
@@ -1462,12 +1472,8 @@ fn execute_merge<S: StorageBackend>(
             // Resolve properties per input record so that bound variables
             // (e.g. from LOAD CSV or WITH) are evaluated correctly.
             for base_rec in base_records {
-                let properties = resolve_map_literal_to_properties(
-                    &np.properties,
-                    &base_rec,
-                    params,
-                    storage,
-                )?;
+                let properties =
+                    resolve_map_literal_to_properties(&np.properties, &base_rec, params, storage)?;
                 let existing_ids = storage.find_nodes(&labels, &properties);
 
                 if existing_ids.is_empty() {

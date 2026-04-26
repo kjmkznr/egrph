@@ -254,20 +254,27 @@ fn parse_match_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
         .into_inner()
         .next()
         .ok_or_else(|| CypherError::ParseError("Empty MATCH clause".to_string()))?;
-    let (optional, pattern_list_pair) = match inner.as_rule() {
+    let (kind, pattern_list_pair) = match inner.as_rule() {
         Rule::optional_match => {
             let pl = inner
                 .into_inner()
                 .next()
                 .ok_or_else(|| CypherError::ParseError("Empty OPTIONAL MATCH".to_string()))?;
-            (true, pl)
+            (MatchKind::Optional, pl)
+        }
+        Rule::mandatory_match => {
+            let pl = inner
+                .into_inner()
+                .next()
+                .ok_or_else(|| CypherError::ParseError("Empty MANDATORY MATCH".to_string()))?;
+            (MatchKind::Mandatory, pl)
         }
         Rule::regular_match => {
             let pl = inner
                 .into_inner()
                 .next()
                 .ok_or_else(|| CypherError::ParseError("Empty MATCH".to_string()))?;
-            (false, pl)
+            (MatchKind::Regular, pl)
         }
         _ => {
             return Err(CypherError::ParseError(
@@ -279,7 +286,7 @@ fn parse_match_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
     let parts = parse_pattern_list(pattern_list_pair)?;
     Ok(Clause::Match(MatchClause {
         pattern: Pattern { parts },
-        optional,
+        kind,
     }))
 }
 

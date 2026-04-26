@@ -129,6 +129,10 @@ pub enum LogicalPlan {
         right: Box<LogicalPlan>,
     },
 
+    /// MANDATORY MATCH guard: pass through input rows unchanged, but raise
+    /// RuntimeError if the input produces zero rows.
+    MandatoryGuard { input: Box<LogicalPlan> },
+
     /// Variable-length expand: traverse min..max hops along relationships.
     VarLengthExpand {
         input: Box<LogicalPlan>,

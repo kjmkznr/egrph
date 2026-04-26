@@ -1770,6 +1770,52 @@ mod tests {
         );
     }
 
+    // MANDATORY MATCH
+    #[test]
+    fn test_mandatory_match_no_match_errors() {
+        let mut g = Graph::new();
+        // Person ノードを作成しない
+        let result = g.execute("MANDATORY MATCH (a:Person) RETURN a");
+        assert!(result.is_err());
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(msg.contains("MANDATORY MATCH"));
+    }
+
+    #[test]
+    fn test_mandatory_match_with_match() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
+        let result = g
+            .execute("MANDATORY MATCH (a:Person) RETURN a.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].values[0],
+            CypherValue::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn test_mandatory_match_after_match_zero_propagates() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\"})").unwrap();
+        // Alice は KNOWS を持たないので最終行数が 0 → エラー
+        let result = g.execute("MATCH (a:Person) MANDATORY MATCH (a)-[:KNOWS]->(b) RETURN b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mandatory_match_where_filtered_out_no_error() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name: \"Alice\", age: 30})")
+            .unwrap();
+        // MANDATORY MATCH は当たる (Alice が存在する) が WHERE で全除外 → エラーにならず空結果
+        let result = g
+            .execute("MANDATORY MATCH (a:Person) WHERE a.age > 999 RETURN a")
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
     // Issue 2: 可変長リレーションシップ
     #[test]
     fn test_var_length_exact_hops() {
