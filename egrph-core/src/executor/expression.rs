@@ -2261,6 +2261,11 @@ fn eval_exists(
     let (start_np, chain): (&NodePattern, &[PatternChainElement]) = match pattern {
         PatternElement::Node(np) => (np, &[]),
         PatternElement::Chain { start, elements } => (start, elements.as_slice()),
+        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => {
+            return Err(CypherError::SemanticError(
+                "shortestPath/allShortestPaths cannot be used inside EXISTS".to_string(),
+            ));
+        }
     };
 
     for step in chain {
@@ -2457,6 +2462,12 @@ fn eval_pattern_comprehension(
     let (start_np, chain): (&NodePattern, &[PatternChainElement]) = match pattern {
         PatternElement::Node(np) => (np, &[]),
         PatternElement::Chain { start, elements } => (start, elements.as_slice()),
+        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => {
+            return Err(CypherError::SemanticError(
+                "shortestPath/allShortestPaths cannot be used inside a pattern comprehension"
+                    .to_string(),
+            ));
+        }
     };
 
     for step in chain {

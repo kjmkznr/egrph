@@ -627,8 +627,8 @@ fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::pattern_element => {
-                pattern_element = Some(parse_pattern_element(inner)?);
+            Rule::plain_pattern_element => {
+                pattern_element = Some(parse_plain_pattern_element(inner)?);
             }
             Rule::merge_action => {
                 let Some(action_inner) = inner.into_inner().next() else {
@@ -667,6 +667,7 @@ fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
     let variable = match &element {
         PatternElement::Node(np) => np.variable.clone(),
         PatternElement::Chain { start, .. } => start.variable.clone(),
+        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => None,
     };
 
     let pattern = Pattern {
@@ -800,12 +801,55 @@ fn parse_pattern(pair: pest::iterators::Pair<Rule>) -> Result<PatternPart, Cyphe
     let variable = variable.or_else(|| match &element {
         PatternElement::Node(np) => np.variable.clone(),
         PatternElement::Chain { start, .. } => start.variable.clone(),
+        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => None,
     });
 
     Ok(PatternPart { variable, element })
 }
 
 fn parse_pattern_element(pair: pest::iterators::Pair<Rule>) -> Result<PatternElement, CypherError> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| CypherError::ParseError("Empty pattern element".to_string()))?;
+    match inner.as_rule() {
+        Rule::shortest_path_pattern => parse_shortest_path_inner(inner, false),
+        Rule::all_shortest_paths_pattern => parse_shortest_path_inner(inner, true),
+        Rule::plain_pattern_element => parse_plain_pattern_element(inner),
+        r => Err(CypherError::ParseError(format!(
+            "Unexpected pattern element rule: {r:?}"
+        ))),
+    }
+}
+
+fn parse_shortest_path_inner(
+    pair: pest::iterators::Pair<Rule>,
+    all: bool,
+) -> Result<PatternElement, CypherError> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::plain_pattern_element {
+            return match (all, parse_plain_pattern_element(inner)?) {
+                (false, PatternElement::Chain { start, elements }) => {
+                    Ok(PatternElement::ShortestPath { start, elements })
+                }
+                (true, PatternElement::Chain { start, elements }) => {
+                    Ok(PatternElement::AllShortestPaths { start, elements })
+                }
+                _ => Err(CypherError::ParseError(
+                    "shortestPath/allShortestPaths requires a path pattern with relationships"
+                        .to_string(),
+                )),
+            };
+        }
+    }
+    Err(CypherError::ParseError(
+        "Empty shortestPath pattern".to_string(),
+    ))
+}
+
+fn parse_plain_pattern_element(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<PatternElement, CypherError> {
     let mut nodes = Vec::new();
     let mut rels = Vec::new();
 
@@ -1527,10 +1571,10 @@ fn parse_map_projection_items(
 }
 
 fn parse_exists_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
-    // exists_kw ~ "{" ~ pattern_element ~ "}"
+    // exists_kw ~ "{" ~ plain_pattern_element ~ "}"
     for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::pattern_element {
-            let element = parse_pattern_element(inner)?;
+        if inner.as_rule() == Rule::plain_pattern_element {
+            let element = parse_plain_pattern_element(inner)?;
             return Ok(Expression::Exists {
                 pattern: Box::new(element),
             });
@@ -1729,8 +1773,8 @@ fn parse_pattern_comprehension(
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::pattern_element => {
-                pattern = Some(parse_pattern_element(inner)?);
+            Rule::plain_pattern_element => {
+                pattern = Some(parse_plain_pattern_element(inner)?);
             }
             Rule::where_kw => {
                 section = Section::WherePred;

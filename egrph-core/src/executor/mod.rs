@@ -648,6 +648,32 @@ fn execute_to_records<S: StorageBackend>(
             params,
         ),
 
+        LogicalPlan::ShortestPath {
+            input,
+            src_variable,
+            dst_variable,
+            rel_variable,
+            path_variable,
+            rel_types,
+            direction,
+            min_hops,
+            max_hops,
+            all_shortest,
+        } => execute_shortest_path(
+            input,
+            src_variable,
+            dst_variable,
+            rel_variable.as_deref(),
+            path_variable,
+            rel_types,
+            direction,
+            *min_hops,
+            *max_hops,
+            *all_shortest,
+            storage,
+            params,
+        ),
+
         LogicalPlan::CreateConstraint {
             label,
             properties,
@@ -1526,6 +1552,11 @@ fn execute_merge<S: StorageBackend>(
             storage,
             params,
         ),
+        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => {
+            Err(CypherError::SemanticError(
+                "shortestPath/allShortestPaths cannot be used in MERGE".to_string(),
+            ))
+        }
     }
 }
 
@@ -1896,6 +1927,22 @@ fn path_chain_contains(
     false
 }
 
+/// Like `path_chain_contains` but for the 3-tuple arena used by `execute_shortest_path`.
+fn path_chain_contains_sp(
+    arena: &[(Option<u32>, EdgeId, NodeId)],
+    mut cur: Option<u32>,
+    edge: EdgeId,
+) -> bool {
+    while let Some(i) = cur {
+        let (parent, e, _) = arena[i as usize];
+        if e == edge {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_var_length_expand<S: StorageBackend>(
     input: &LogicalPlan,
@@ -2140,4 +2187,214 @@ fn resolve_map_literal_to_properties<S: StorageBackend>(
         }
     }
     Ok(properties)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_shortest_path<S: StorageBackend>(
+    input: &LogicalPlan,
+    src_variable: &str,
+    dst_variable: &str,
+    rel_variable: Option<&str>,
+    path_variable: &str,
+    rel_types: &[String],
+    direction: &Direction,
+    min_hops: u64,
+    max_hops: Option<u64>,
+    all_shortest: bool,
+    storage: &mut S,
+    params: &Parameters,
+) -> Result<(Vec<String>, Vec<Record>), CypherError> {
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
+
+    if !cols.contains(&path_variable.to_string()) {
+        cols.push(path_variable.to_string());
+    }
+    if let Some(rv) = rel_variable
+        && !cols.contains(&rv.to_string())
+    {
+        cols.push(rv.to_string());
+    }
+
+    const BFS_DEFAULT_MAX_HOPS: u64 = 100;
+    let is_unbounded = max_hops.is_none();
+    let effective_max = max_hops.unwrap_or(BFS_DEFAULT_MAX_HOPS);
+
+    let mut result_records: Vec<Record> = Vec::new();
+
+    for rec in &input_records {
+        let start_id = match rec.get(src_variable) {
+            Some(CypherValue::Node(n)) => n.id,
+            _ => continue,
+        };
+        let target_id = match rec.get(dst_variable) {
+            Some(CypherValue::Node(n)) => n.id,
+            _ => continue,
+        };
+
+        // Trivial: src == dst (zero-length path)
+        if start_id == target_id {
+            if min_hops == 0
+                && let Some(node) = storage.get_node(start_id)
+            {
+                let path_val = CypherValue::Path(Path {
+                    nodes: vec![node],
+                    relationships: vec![],
+                });
+                let mut new_rec = rec.clone();
+                new_rec.insert(path_variable.to_string(), path_val);
+                if let Some(rv) = rel_variable {
+                    new_rec.insert(rv.to_string(), CypherValue::List(vec![]));
+                }
+                result_records.push(new_rec);
+            }
+            continue;
+        }
+
+        // Arena: (parent_idx, edge_id, arrived_node_id)
+        let mut path_arena: Vec<(Option<u32>, EdgeId, NodeId)> = Vec::new();
+
+        // frontier: (current_node_id, path_arena_index_of_last_step)
+        let mut frontier: Vec<(NodeId, Option<u32>)> = vec![(start_id, None)];
+
+        // Track the depth at which each node was first reached.
+        let mut visited_depth: HashMap<NodeId, u64> = HashMap::new();
+        visited_depth.insert(start_id, 0);
+
+        let mut found_paths: Vec<u32> = Vec::new();
+
+        'bfs: for depth in 1..=effective_max {
+            if is_unbounded && depth > BFS_DEFAULT_MAX_HOPS {
+                return Err(CypherError::RuntimeError(format!(
+                    "shortestPath traversal exceeded the default limit of {} hops. \
+                     Use an explicit upper bound, e.g. [*..{}], to suppress this error.",
+                    BFS_DEFAULT_MAX_HOPS, BFS_DEFAULT_MAX_HOPS
+                )));
+            }
+
+            let mut next_frontier: Vec<(NodeId, Option<u32>)> = Vec::new();
+
+            for (cur_id, parent_idx) in &frontier {
+                let candidate_eids: Vec<EdgeId> = match direction {
+                    Direction::Outgoing => storage.outgoing_edge_ids(*cur_id),
+                    Direction::Incoming => storage.incoming_edge_ids(*cur_id),
+                    Direction::Undirected => {
+                        let mut out = storage.outgoing_edge_ids(*cur_id);
+                        out.extend(storage.incoming_edge_ids(*cur_id));
+                        out
+                    }
+                };
+
+                for eid in candidate_eids {
+                    // No repeated edges on a single path
+                    if path_chain_contains_sp(&path_arena, *parent_idx, eid) {
+                        continue;
+                    }
+
+                    let Some(edge) = storage.get_edge(eid) else {
+                        continue;
+                    };
+
+                    // Relationship type filter
+                    if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
+                        continue;
+                    }
+
+                    let next_id = match direction {
+                        Direction::Outgoing => edge.dst,
+                        Direction::Incoming => edge.src,
+                        Direction::Undirected => {
+                            if edge.src == *cur_id {
+                                edge.dst
+                            } else {
+                                edge.src
+                            }
+                        }
+                    };
+
+                    // Visited-depth check.
+                    // allShortestPaths: allow revisiting a node at the same depth (multiple paths).
+                    // shortestPath: skip any already-visited node to avoid redundant paths.
+                    if let Some(&prev_depth) = visited_depth.get(&next_id) {
+                        if all_shortest {
+                            if prev_depth != depth {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    let new_idx = u32::try_from(path_arena.len()).map_err(|_| {
+                        CypherError::RuntimeError(
+                            "shortestPath traversal exceeded internal arena capacity".to_string(),
+                        )
+                    })?;
+                    path_arena.push((*parent_idx, eid, next_id));
+                    let new_path_idx = Some(new_idx);
+
+                    if next_id == target_id && depth >= min_hops {
+                        found_paths.push(new_idx);
+                        if !all_shortest {
+                            break 'bfs;
+                        }
+                    }
+
+                    visited_depth.entry(next_id).or_insert(depth);
+                    next_frontier.push((next_id, new_path_idx));
+                }
+            }
+
+            if !found_paths.is_empty() {
+                break;
+            }
+            if next_frontier.is_empty() {
+                break;
+            }
+            frontier = next_frontier;
+        }
+
+        // Reconstruct Path values from arena
+        for &terminal_idx in &found_paths {
+            let mut edges_rev: Vec<Edge> = Vec::new();
+            let mut nodes_rev: Vec<Node> = Vec::new();
+
+            let mut cur = Some(terminal_idx);
+            while let Some(i) = cur {
+                let (parent, eid, node_id) = path_arena[i as usize];
+                if let (Some(edge), Some(node)) = (storage.get_edge(eid), storage.get_node(node_id))
+                {
+                    edges_rev.push(edge);
+                    nodes_rev.push(node);
+                }
+                cur = parent;
+            }
+            edges_rev.reverse();
+            nodes_rev.reverse();
+
+            let mut all_nodes: Vec<Node> = Vec::with_capacity(nodes_rev.len() + 1);
+            if let Some(start_node) = storage.get_node(start_id) {
+                all_nodes.push(start_node);
+            }
+            all_nodes.extend(nodes_rev);
+
+            let rel_list: Vec<CypherValue> = edges_rev
+                .iter()
+                .map(|e| CypherValue::Relationship(e.clone()))
+                .collect();
+
+            let path_val = CypherValue::Path(Path {
+                nodes: all_nodes,
+                relationships: edges_rev,
+            });
+
+            let mut new_rec = rec.clone();
+            new_rec.insert(path_variable.to_string(), path_val);
+            if let Some(rv) = rel_variable {
+                new_rec.insert(rv.to_string(), CypherValue::List(rel_list));
+            }
+            result_records.push(new_rec);
+        }
+    }
+
+    Ok((cols, result_records))
 }

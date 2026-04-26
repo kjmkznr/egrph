@@ -105,7 +105,7 @@ delete_clause = { detach_kw? ~ ^"DELETE" ~ expression ~ ("," ~ expression)* }
 detach_kw = @{ ^"DETACH" ~ !ASCII_ALPHANUMERIC }
 
 // --- MERGE ---
-merge_clause = { ^"MERGE" ~ pattern_element ~ merge_action* }
+merge_clause = { ^"MERGE" ~ plain_pattern_element ~ merge_action* }
 merge_action = { on_create_action | on_match_action }
 on_create_action = { ^"ON" ~ ^"CREATE" ~ ^"SET" ~ set_item ~ ("," ~ set_item)* }
 on_match_action = { ^"ON" ~ ^"MATCH" ~ ^"SET" ~ set_item ~ ("," ~ set_item)* }
@@ -122,7 +122,18 @@ limit_clause = { ^"LIMIT" ~ expression }
 // --- Patterns ---
 pattern_list = { pattern ~ ("," ~ pattern)* }
 pattern = { (variable ~ "=")? ~ pattern_element }
-pattern_element = { node_pattern ~ (relationship_pattern ~ node_pattern)* }
+
+// Plain pattern element (used in EXISTS, MERGE, pattern_comprehension)
+plain_pattern_element = { node_pattern ~ (relationship_pattern ~ node_pattern)* }
+
+// shortestPath / allShortestPaths wrappers
+shortest_path_kw      = @{ ^"shortestPath"     ~ !ASCII_ALPHANUMERIC }
+all_shortest_paths_kw = @{ ^"allShortestPaths" ~ !ASCII_ALPHANUMERIC }
+shortest_path_pattern      = { shortest_path_kw      ~ "(" ~ plain_pattern_element ~ ")" }
+all_shortest_paths_pattern = { all_shortest_paths_kw ~ "(" ~ plain_pattern_element ~ ")" }
+
+// pattern_element: shortestPath/allShortestPaths wrappers or plain pattern
+pattern_element = { shortest_path_pattern | all_shortest_paths_pattern | plain_pattern_element }
 
 // Node pattern: (var:Label {prop: val})
 node_pattern = { "(" ~ variable? ~ labels? ~ properties? ~ ")" }
@@ -237,7 +248,7 @@ case_alternative = { ^"WHEN" ~ expression ~ ^"THEN" ~ expression }
 // --- Pattern comprehension ---
 // [(pattern) WHERE expression | expression]
 pattern_comprehension = {
-    "[" ~ pattern_element ~ (where_kw ~ expression)? ~ pipe_op ~ expression ~ "]"
+    "[" ~ plain_pattern_element ~ (where_kw ~ expression)? ~ pipe_op ~ expression ~ "]"
 }
 
 // --- List comprehension ---
@@ -260,7 +271,7 @@ reduce_kw = @{ ^"REDUCE" ~ !ASCII_ALPHANUMERIC }
 
 // --- EXISTS subquery expression ---
 // EXISTS { pattern_element } — returns true if the pattern has at least one match.
-exists_expression = { exists_kw ~ "{" ~ pattern_element ~ "}" }
+exists_expression = { exists_kw ~ "{" ~ plain_pattern_element ~ "}" }
 
 // --- Parameter ---
 parameter = { "$" ~ IDENTIFIER }

@@ -71,6 +71,11 @@ fn plan_create(create: &CreateClause, input: LogicalPlan) -> Result<LogicalPlan,
                     elements: elements.clone(),
                 };
             }
+            PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => {
+                return Err(CypherError::SemanticError(
+                    "shortestPath/allShortestPaths cannot be used in CREATE".to_string(),
+                ));
+            }
         }
     }
 
@@ -276,7 +281,107 @@ fn plan_match_scan(
 
             Ok(current)
         }
+        PatternElement::ShortestPath { start, elements } => {
+            plan_shortest_path_scan(part, start, elements, false, part_idx)
+        }
+        PatternElement::AllShortestPaths { start, elements } => {
+            plan_shortest_path_scan(part, start, elements, true, part_idx)
+        }
     }
+}
+
+fn plan_shortest_path_scan(
+    part: &crate::ast::PatternPart,
+    start: &NodePattern,
+    elements: &[crate::ast::PatternChainElement],
+    all_shortest: bool,
+    part_idx: usize,
+) -> Result<LogicalPlan, CypherError> {
+    if elements.len() != 1 {
+        return Err(CypherError::SemanticError(
+            "shortestPath/allShortestPaths requires exactly one relationship chain element"
+                .to_string(),
+        ));
+    }
+    let chain_elem = &elements[0];
+    if chain_elem.relationship.range.is_none() {
+        return Err(CypherError::SemanticError(
+            "shortestPath/allShortestPaths requires a variable-length relationship pattern (e.g. [*])".to_string(),
+        ));
+    }
+    let path_variable = part.variable.clone().ok_or_else(|| {
+        CypherError::SemanticError(
+            "shortestPath/allShortestPaths result must be bound to a variable (e.g. p = shortestPath(...))".to_string(),
+        )
+    })?;
+
+    // Build scan plan for start node
+    let start_var = start
+        .variable
+        .clone()
+        .unwrap_or_else(|| format!("__sp_src_{}__", part_idx));
+    let mut src_plan = LogicalPlan::ScanNodes {
+        label_filter: start.labels.first().cloned(),
+        inline_props: inline_props_from_pattern(&start.properties),
+        variable: start_var.clone(),
+    };
+    for label in start.labels.iter().skip(1) {
+        src_plan = LogicalPlan::Filter {
+            input: Box::new(src_plan),
+            predicate: Expression::FunctionCall {
+                name: "__has_label".to_string(),
+                distinct: false,
+                args: vec![
+                    Expression::Variable(start_var.clone()),
+                    Expression::Literal(Literal::String(label.clone())),
+                ],
+            },
+        };
+    }
+    src_plan = add_property_filters(src_plan, &start_var, &start.properties);
+
+    // Build scan plan for destination node
+    let end_node = &chain_elem.node;
+    let dst_var = end_node
+        .variable
+        .clone()
+        .unwrap_or_else(|| format!("__sp_dst_{}__", part_idx));
+    let mut dst_plan = LogicalPlan::ScanNodes {
+        label_filter: end_node.labels.first().cloned(),
+        inline_props: inline_props_from_pattern(&end_node.properties),
+        variable: dst_var.clone(),
+    };
+    for label in end_node.labels.iter().skip(1) {
+        dst_plan = LogicalPlan::Filter {
+            input: Box::new(dst_plan),
+            predicate: Expression::FunctionCall {
+                name: "__has_label".to_string(),
+                distinct: false,
+                args: vec![
+                    Expression::Variable(dst_var.clone()),
+                    Expression::Literal(Literal::String(label.clone())),
+                ],
+            },
+        };
+    }
+    dst_plan = add_property_filters(dst_plan, &dst_var, &end_node.properties);
+
+    let range = chain_elem.relationship.range.as_ref().unwrap();
+    Ok(LogicalPlan::ShortestPath {
+        input: Box::new(LogicalPlan::CartesianProduct {
+            left: Box::new(src_plan),
+            right: Box::new(dst_plan),
+        }),
+        src_variable: start_var,
+        dst_variable: dst_var,
+        rel_variable: chain_elem.relationship.variable.clone(),
+        path_variable,
+        rel_types: chain_elem.relationship.rel_types.clone(),
+        direction: chain_elem.relationship.direction.clone(),
+        min_hops: range.min.unwrap_or(1),
+        max_hops: range.max,
+        all_shortest,
+    })
 }
 
 /// Extract inline property entries from a node pattern (e.g. `{gnId: "x"}`)

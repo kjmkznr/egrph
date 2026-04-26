@@ -4001,4 +4001,119 @@ mod tests {
             CypherValue::List(vec![CypherValue::Integer(4), CypherValue::Integer(6)])
         );
     }
+
+    // ── shortestPath / allShortestPaths tests ──────────────────────────────────
+
+    #[test]
+    fn test_shortest_path_linear() {
+        let mut g = Graph::new();
+        g.execute("CREATE (a:SP {name:'A'})-[:E]->(b:SP {name:'B'})-[:E]->(c:SP {name:'C'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH p = shortestPath((a:SP {name:'A'})-[*]-(c:SP {name:'C'})) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => {
+                assert_eq!(path.nodes.len(), 3);
+                assert_eq!(path.relationships.len(), 2);
+            }
+            other => panic!("Expected Path, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_shortest_path_diamond_single() {
+        // A->B->D and A->C->D (two paths of length 2); shortestPath returns 1
+        let mut g = Graph::new();
+        g.execute("CREATE (a:Dia {n:'A'})-[:E]->(b:Dia {n:'B'})-[:E]->(d:Dia {n:'D'})")
+            .unwrap();
+        g.execute(
+            "MATCH (a:Dia {n:'A'}), (d:Dia {n:'D'}) CREATE (a)-[:E]->(:Dia {n:'C'})-[:E]->(d)",
+        )
+        .unwrap();
+        let result = g
+            .execute("MATCH p = shortestPath((a:Dia {n:'A'})-[*]->(d:Dia {n:'D'})) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => assert_eq!(path.relationships.len(), 2),
+            other => panic!("Expected Path, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_all_shortest_paths_diamond() {
+        // Same diamond: allShortestPaths returns both length-2 paths
+        let mut g = Graph::new();
+        g.execute("CREATE (a:Dia2 {n:'A'})-[:E]->(b:Dia2 {n:'B'})-[:E]->(d:Dia2 {n:'D'})")
+            .unwrap();
+        g.execute(
+            "MATCH (a:Dia2 {n:'A'}), (d:Dia2 {n:'D'}) CREATE (a)-[:E]->(:Dia2 {n:'C'})-[:E]->(d)",
+        )
+        .unwrap();
+        let result = g
+            .execute("MATCH p = allShortestPaths((a:Dia2 {n:'A'})-[*]->(d:Dia2 {n:'D'})) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        for row in &result.rows {
+            match &row.values[0] {
+                CypherValue::Path(path) => assert_eq!(path.relationships.len(), 2),
+                other => panic!("Expected Path, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_shortest_path_no_path() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:NP {n:'X'})").unwrap();
+        g.execute("CREATE (:NP {n:'Y'})").unwrap();
+        let result = g
+            .execute("MATCH p = shortestPath((a:NP {n:'X'})-[*]-(b:NP {n:'Y'})) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_shortest_path_bounded_hops_excludes() {
+        // A->B->C (length 2); bound [*1..1] means no direct A->C edge → empty
+        let mut g = Graph::new();
+        g.execute("CREATE (a:Bnd {n:'A'})-[:E]->(b:Bnd {n:'B'})-[:E]->(c:Bnd {n:'C'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH p = shortestPath((a:Bnd {n:'A'})-[*1..1]->(c:Bnd {n:'C'})) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_shortest_path_undirected() {
+        let mut g = Graph::new();
+        g.execute("CREATE (a:Und {n:'A'})-[:E]->(b:Und {n:'B'})")
+            .unwrap();
+        // Query from B to A using undirected [*]
+        let result = g
+            .execute("MATCH p = shortestPath((b:Und {n:'B'})-[*]-(a:Und {n:'A'})) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => assert_eq!(path.relationships.len(), 1),
+            other => panic!("Expected Path, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_shortest_path_no_variable_error() {
+        let mut g = Graph::new();
+        let result = g.execute("MATCH shortestPath((a:SP {n:'A'})-[*]-(b:SP {n:'B'})) RETURN a");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_shortest_path_non_varlength_error() {
+        let mut g = Graph::new();
+        let result = g.execute("MATCH p = shortestPath((a:SP)-[:E]->(b:SP)) RETURN p");
+        assert!(result.is_err());
+    }
 }

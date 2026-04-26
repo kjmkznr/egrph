@@ -167,4 +167,21 @@ pub enum LogicalPlan {
         properties: Vec<String>,
         constraint_type: ConstraintType,
     },
+
+    /// shortestPath / allShortestPaths BFS between two bound nodes.
+    /// `all_shortest = false` → emit one path (first found at minimum depth).
+    /// `all_shortest = true`  → emit all paths at minimum depth.
+    ShortestPath {
+        input: Box<LogicalPlan>,
+        src_variable: String,
+        dst_variable: String,
+        rel_variable: Option<String>,
+        /// Variable bound to the resulting Path value (the `p` in `p = shortestPath(...)`).
+        path_variable: String,
+        rel_types: Vec<String>,
+        direction: Direction,
+        min_hops: u64,
+        max_hops: Option<u64>,
+        all_shortest: bool,
+    },
 }

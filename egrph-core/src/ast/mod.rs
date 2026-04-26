@@ -213,6 +213,14 @@ pub enum PatternElement {
         start: NodePattern,
         elements: Vec<PatternChainElement>,
     },
+    ShortestPath {
+        start: NodePattern,
+        elements: Vec<PatternChainElement>,
+    },
+    AllShortestPaths {
+        start: NodePattern,
+        elements: Vec<PatternChainElement>,
+    },
 }
 
 #[derive(Debug, Clone)]
