@@ -1450,6 +1450,7 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
         .ok_or_else(|| CypherError::ParseError("Empty atom".to_string()))?;
     match inner.as_rule() {
         Rule::case_expression => parse_case_expression(inner),
+        Rule::pattern_comprehension => parse_pattern_comprehension(inner),
         Rule::list_comprehension => parse_list_comprehension(inner),
         Rule::filter_predicate => parse_filter_predicate(inner),
         Rule::reduce_expression => parse_reduce_expression(inner),
@@ -1707,6 +1708,55 @@ fn parse_case_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression
         operand,
         alternatives,
         default,
+    })
+}
+
+fn parse_pattern_comprehension(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
+    // "[" ~ pattern_element ~ (where_kw ~ expression)? ~ pipe_op ~ expression ~ "]"
+    let mut pattern = None;
+    let mut predicate = None;
+    let mut projection = None;
+
+    enum Section {
+        WherePred,
+        Projection,
+    }
+    let mut section = Section::WherePred;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::pattern_element => {
+                pattern = Some(parse_pattern_element(inner)?);
+            }
+            Rule::where_kw => {
+                section = Section::WherePred;
+            }
+            Rule::pipe_op => {
+                section = Section::Projection;
+            }
+            Rule::expression => {
+                let expr = parse_expression(inner)?;
+                match section {
+                    Section::WherePred => {
+                        predicate = Some(Box::new(expr));
+                    }
+                    Section::Projection => {
+                        projection = Some(Box::new(expr));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Expression::PatternComprehension {
+        pattern: Box::new(pattern.ok_or_else(|| {
+            CypherError::ParseError("Missing pattern in pattern comprehension".to_string())
+        })?),
+        predicate,
+        projection: projection.ok_or_else(|| {
+            CypherError::ParseError("Missing projection in pattern comprehension".to_string())
+        })?,
     })
 }
 

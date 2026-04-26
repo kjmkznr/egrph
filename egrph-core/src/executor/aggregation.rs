@@ -102,6 +102,17 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
                     .map(|m| expr_contains_aggregation(m))
                     .unwrap_or(false)
         }
+        Expression::PatternComprehension {
+            predicate,
+            projection,
+            ..
+        } => {
+            predicate
+                .as_ref()
+                .map(|p| expr_contains_aggregation(p))
+                .unwrap_or(false)
+                || expr_contains_aggregation(projection)
+        }
         Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Parameter(_)

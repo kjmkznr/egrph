@@ -3842,4 +3842,149 @@ mod tests {
             panic!("expected Map");
         }
     }
+
+    // ─── Pattern comprehension tests ─────────────────────────────────────────
+
+    fn setup_pc_graph() -> Graph {
+        let mut g = Graph::new();
+        g.execute("CREATE (:Person {name:'Alice'})").unwrap();
+        g.execute("CREATE (:Person {name:'Bob'})").unwrap();
+        g.execute("CREATE (:Car {model:'Tesla', year:2020})").unwrap();
+        g.execute("MATCH (p:Person {name:'Bob'}), (c:Car) CREATE (p)-[:OWNS {primary:true}]->(c)")
+            .unwrap();
+        g.execute(
+            "MATCH (a:Person {name:'Alice'}), (b:Person {name:'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+        g
+    }
+
+    #[test]
+    fn test_pattern_comprehension_basic() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute("MATCH (p:Person) RETURN [(p)-[:OWNS]->(c) | c.model] AS owned")
+            .unwrap();
+        assert_eq!(r.rows.len(), 2);
+        let owned: Vec<&CypherValue> = r.rows.iter().map(|row| &row.values[0]).collect();
+        let tesla_list = CypherValue::List(vec![CypherValue::String("Tesla".to_string())]);
+        let empty_list = CypherValue::List(vec![]);
+        assert!(owned.contains(&&tesla_list));
+        assert!(owned.contains(&&empty_list));
+    }
+
+    #[test]
+    fn test_pattern_comprehension_where_filter() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute(
+                "MATCH (p:Person {name:'Bob'}) RETURN [(p)-[:OWNS]->(c) WHERE c.year > 2019 | c.model] AS owned",
+            )
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![CypherValue::String("Tesla".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_pattern_comprehension_where_excludes_all() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute(
+                "MATCH (p:Person {name:'Bob'}) RETURN [(p)-[:OWNS]->(c) WHERE c.year < 2000 | c.model] AS owned",
+            )
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0].values[0], CypherValue::List(vec![]));
+    }
+
+    #[test]
+    fn test_pattern_comprehension_empty_is_list_not_null() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute("MATCH (p:Person {name:'Alice'}) RETURN [(p)-[:OWNS]->(c) | c.model] AS owned")
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0].values[0], CypherValue::List(vec![]));
+    }
+
+    #[test]
+    fn test_pattern_comprehension_direction_incoming() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute("MATCH (c:Car) RETURN [(c)<-[:OWNS]-(p) | p.name] AS owners")
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![CypherValue::String("Bob".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_pattern_comprehension_direction_undirected() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute("MATCH (c:Car) RETURN [(c)-[:OWNS]-(p) | p.name] AS neighbors")
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![CypherValue::String("Bob".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_pattern_comprehension_rel_variable() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute(
+                "MATCH (p:Person {name:'Bob'}) RETURN [(p)-[r:OWNS]->(c) | r.primary] AS flags",
+            )
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![CypherValue::Boolean(true)])
+        );
+    }
+
+    #[test]
+    fn test_pattern_comprehension_multi_hop() {
+        let mut g = setup_pc_graph();
+        let r = g
+            .execute(
+                "MATCH (a:Person {name:'Alice'}) RETURN [(a)-[:KNOWS]->(b)-[:OWNS]->(c) | c.model] AS reachable",
+            )
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![CypherValue::String("Tesla".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_pattern_comprehension_var_length_unsupported() {
+        let mut g = setup_pc_graph();
+        let result = g.execute(
+            "MATCH (p:Person {name:'Bob'}) RETURN [(p)-[:OWNS*1..3]->(c) | c.model]",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_list_comprehension_regression_after_pattern_comprehension() {
+        let mut g = Graph::new();
+        let r = g
+            .execute("RETURN [x IN [1,2,3] WHERE x > 1 | x*2] AS result")
+            .unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(
+            r.rows[0].values[0],
+            CypherValue::List(vec![CypherValue::Integer(4), CypherValue::Integer(6)])
+        );
+    }
 }

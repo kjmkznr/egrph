@@ -348,6 +348,12 @@ pub enum Expression {
         list: Box<Expression>,
         body: Box<Expression>,
     },
+    /// Pattern comprehension: [(pattern) WHERE predicate | projection]
+    PatternComprehension {
+        pattern: Box<PatternElement>,
+        predicate: Option<Box<Expression>>,
+        projection: Box<Expression>,
+    },
     /// EXISTS { pattern } subquery — true iff the pattern has at least one match
     /// when evaluated against the current (outer) variable bindings.
     Exists {

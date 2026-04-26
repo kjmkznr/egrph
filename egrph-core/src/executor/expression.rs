@@ -287,6 +287,18 @@ pub fn eval_with_params(
             params,
             storage,
         )?,
+        Expression::PatternComprehension {
+            pattern,
+            predicate,
+            projection,
+        } => eval_pattern_comprehension(
+            pattern,
+            predicate.as_deref(),
+            projection,
+            record,
+            params,
+            storage,
+        )?,
         Expression::Exists { pattern } => {
             CypherValue::Boolean(eval_exists(pattern, record, params, storage)?)
         }
@@ -2430,4 +2442,178 @@ fn exists_values_equal(actual: &CypherValue, expected: &CypherValue) -> bool {
         compare_values(actual, expected),
         Some(std::cmp::Ordering::Equal)
     )
+}
+
+// ─── Pattern comprehension evaluation ────────────────────────────────────────
+
+fn eval_pattern_comprehension(
+    pattern: &PatternElement,
+    predicate: Option<&Expression>,
+    projection: &Expression,
+    record: &Record,
+    params: &Parameters,
+    storage: &dyn StorageBackend,
+) -> Result<CypherValue, CypherError> {
+    let (start_np, chain): (&NodePattern, &[PatternChainElement]) = match pattern {
+        PatternElement::Node(np) => (np, &[]),
+        PatternElement::Chain { start, elements } => (start, elements.as_slice()),
+    };
+
+    for step in chain {
+        if step.relationship.range.is_some() {
+            return Err(CypherError::SemanticError(
+                "Pattern comprehension does not yet support variable-length relationships"
+                    .to_string(),
+            ));
+        }
+    }
+
+    let candidates = pc_node_candidates(start_np, record, params, storage)?;
+    let mut results = Vec::new();
+
+    for start_node in candidates {
+        let mut start_scope = record.clone();
+        if let Some(var) = &start_np.variable {
+            start_scope.insert(var.clone(), CypherValue::Node(start_node.clone()));
+        }
+        pc_walk_chain(
+            &start_node,
+            chain,
+            0,
+            start_scope,
+            predicate,
+            projection,
+            record,
+            params,
+            storage,
+            &mut results,
+        )?;
+    }
+
+    Ok(CypherValue::List(results))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pc_walk_chain(
+    current: &Node,
+    chain: &[PatternChainElement],
+    idx: usize,
+    scope: Record,
+    predicate: Option<&Expression>,
+    projection: &Expression,
+    outer_record: &Record,
+    params: &Parameters,
+    storage: &dyn StorageBackend,
+    results: &mut Vec<CypherValue>,
+) -> Result<(), CypherError> {
+    if idx == chain.len() {
+        if let Some(pred) = predicate {
+            let pred_val = eval_with_params(pred, &scope, params, storage)?;
+            if !is_truthy(&pred_val) {
+                return Ok(());
+            }
+        }
+        results.push(eval_with_params(projection, &scope, params, storage)?);
+        return Ok(());
+    }
+
+    let step = &chain[idx];
+    let edges = match step.relationship.direction {
+        Direction::Outgoing => storage.outgoing_edges(current.id),
+        Direction::Incoming => storage.incoming_edges(current.id),
+        Direction::Undirected => {
+            let mut v = storage.outgoing_edges(current.id);
+            v.extend(storage.incoming_edges(current.id));
+            v
+        }
+    };
+
+    for edge in &edges {
+        if !step.relationship.rel_types.is_empty()
+            && !step.relationship.rel_types.iter().any(|t| t == &edge.label)
+        {
+            continue;
+        }
+        if !exists_rel_properties_match(edge, &step.relationship.properties, &scope, params, storage)? {
+            continue;
+        }
+        let next_id = match step.relationship.direction {
+            Direction::Outgoing => edge.dst,
+            Direction::Incoming => edge.src,
+            Direction::Undirected => {
+                if edge.src == current.id {
+                    edge.dst
+                } else {
+                    edge.src
+                }
+            }
+        };
+        let Some(next) = storage.get_node(next_id) else {
+            continue;
+        };
+        if let Some(var) = &step.node.variable {
+            match outer_record.get(var) {
+                Some(CypherValue::Node(bound)) => {
+                    if bound.id != next.id {
+                        continue;
+                    }
+                }
+                Some(_) => continue,
+                None => {}
+            }
+        }
+        if !exists_node_matches(&next, &step.node, &scope, params, storage)? {
+            continue;
+        }
+        let mut next_scope = scope.clone();
+        if let Some(var) = &step.relationship.variable {
+            next_scope.insert(var.clone(), CypherValue::Relationship(edge.clone()));
+        }
+        if let Some(var) = &step.node.variable {
+            next_scope.insert(var.clone(), CypherValue::Node(next.clone()));
+        }
+        pc_walk_chain(
+            &next,
+            chain,
+            idx + 1,
+            next_scope,
+            predicate,
+            projection,
+            outer_record,
+            params,
+            storage,
+            results,
+        )?;
+    }
+    Ok(())
+}
+
+fn pc_node_candidates(
+    np: &NodePattern,
+    record: &Record,
+    params: &Parameters,
+    storage: &dyn StorageBackend,
+) -> Result<Vec<Node>, CypherError> {
+    if let Some(var) = &np.variable {
+        match record.get(var) {
+            Some(CypherValue::Node(n)) => {
+                return if exists_node_matches(n, np, record, params, storage)? {
+                    Ok(vec![n.clone()])
+                } else {
+                    Ok(vec![])
+                };
+            }
+            Some(_) => return Ok(vec![]),
+            None => {}
+        }
+    }
+    let label_filter = np.labels.first().map(|s| s.as_str());
+    let nodes = storage.match_nodes(label_filter);
+    let mut out = Vec::new();
+    for n in nodes {
+        if exists_node_matches(&n, np, record, params, storage)? {
+            out.push(n);
+        }
+    }
+    Ok(out)
 }

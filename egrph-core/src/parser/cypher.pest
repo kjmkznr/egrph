@@ -214,6 +214,7 @@ exists_kw      = @{ ^"EXISTS" ~ !ASCII_ALPHANUMERIC }
 // --- Atoms ---
 atom = {
     case_expression
+  | pattern_comprehension
   | list_comprehension
   | filter_predicate
   | reduce_expression
@@ -232,6 +233,12 @@ case_expression = {
     ^"CASE" ~ expression? ~ case_alternative+ ~ (^"ELSE" ~ expression)? ~ ^"END"
 }
 case_alternative = { ^"WHEN" ~ expression ~ ^"THEN" ~ expression }
+
+// --- Pattern comprehension ---
+// [(pattern) WHERE expression | expression]
+pattern_comprehension = {
+    "[" ~ pattern_element ~ (where_kw ~ expression)? ~ pipe_op ~ expression ~ "]"
+}
 
 // --- List comprehension ---
 // [variable IN expression WHERE expression | expression]
