@@ -3773,7 +3773,10 @@ mod tests {
             .unwrap();
         assert_eq!(r.rows.len(), 1);
         if let CypherValue::Map(m) = &r.rows[0].values[0] {
-            assert_eq!(m.get("name"), Some(&CypherValue::String("Alice".to_string())));
+            assert_eq!(
+                m.get("name"),
+                Some(&CypherValue::String("Alice".to_string()))
+            );
             assert_eq!(m.get("age"), Some(&CypherValue::Integer(30)));
             assert!(!m.contains_key("city"));
         } else {
@@ -3784,7 +3787,8 @@ mod tests {
     #[test]
     fn test_map_projection_literal_entry() {
         let mut g = Graph::new();
-        g.execute("CREATE (a:Person {name: 'Bob', age: 25})").unwrap();
+        g.execute("CREATE (a:Person {name: 'Bob', age: 25})")
+            .unwrap();
         let r = g
             .execute("MATCH (a:Person) RETURN a { .name, score: a.age * 2 }")
             .unwrap();
@@ -3800,11 +3804,15 @@ mod tests {
     #[test]
     fn test_map_projection_all_properties() {
         let mut g = Graph::new();
-        g.execute("CREATE (a:Person {name: 'Carol', age: 40})").unwrap();
+        g.execute("CREATE (a:Person {name: 'Carol', age: 40})")
+            .unwrap();
         let r = g.execute("MATCH (a:Person) RETURN a { .* }").unwrap();
         assert_eq!(r.rows.len(), 1);
         if let CypherValue::Map(m) = &r.rows[0].values[0] {
-            assert_eq!(m.get("name"), Some(&CypherValue::String("Carol".to_string())));
+            assert_eq!(
+                m.get("name"),
+                Some(&CypherValue::String("Carol".to_string()))
+            );
             assert_eq!(m.get("age"), Some(&CypherValue::Integer(40)));
         } else {
             panic!("expected Map");
@@ -3821,9 +3829,15 @@ mod tests {
             .unwrap();
         assert_eq!(r.rows.len(), 1);
         if let CypherValue::Map(m) = &r.rows[0].values[0] {
-            assert_eq!(m.get("name"), Some(&CypherValue::String("Dave".to_string())));
+            assert_eq!(
+                m.get("name"),
+                Some(&CypherValue::String("Dave".to_string()))
+            );
             assert_eq!(m.get("age"), Some(&CypherValue::Integer(20)));
-            assert_eq!(m.get("city"), Some(&CypherValue::String("Osaka".to_string())));
+            assert_eq!(
+                m.get("city"),
+                Some(&CypherValue::String("Osaka".to_string()))
+            );
             assert_eq!(m.get("bonus"), Some(&CypherValue::Integer(99)));
         } else {
             panic!("expected Map");
@@ -3849,7 +3863,8 @@ mod tests {
         let mut g = Graph::new();
         g.execute("CREATE (:Person {name:'Alice'})").unwrap();
         g.execute("CREATE (:Person {name:'Bob'})").unwrap();
-        g.execute("CREATE (:Car {model:'Tesla', year:2020})").unwrap();
+        g.execute("CREATE (:Car {model:'Tesla', year:2020})")
+            .unwrap();
         g.execute("MATCH (p:Person {name:'Bob'}), (c:Car) CREATE (p)-[:OWNS {primary:true}]->(c)")
             .unwrap();
         g.execute(
@@ -3969,9 +3984,8 @@ mod tests {
     #[test]
     fn test_pattern_comprehension_var_length_unsupported() {
         let mut g = setup_pc_graph();
-        let result = g.execute(
-            "MATCH (p:Person {name:'Bob'}) RETURN [(p)-[:OWNS*1..3]->(c) | c.model]",
-        );
+        let result =
+            g.execute("MATCH (p:Person {name:'Bob'}) RETURN [(p)-[:OWNS*1..3]->(c) | c.model]");
         assert!(result.is_err());
     }
 

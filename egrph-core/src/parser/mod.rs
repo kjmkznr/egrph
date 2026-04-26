@@ -1499,12 +1499,14 @@ fn parse_map_projection_items(
                     let mut parts = item_inner.into_inner();
                     let key = parts
                         .next()
-                        .ok_or_else(|| CypherError::ParseError("Missing literal entry key".to_string()))?
+                        .ok_or_else(|| {
+                            CypherError::ParseError("Missing literal entry key".to_string())
+                        })?
                         .as_str()
                         .to_string();
-                    let val_pair = parts
-                        .next()
-                        .ok_or_else(|| CypherError::ParseError("Missing literal entry value".to_string()))?;
+                    let val_pair = parts.next().ok_or_else(|| {
+                        CypherError::ParseError("Missing literal entry value".to_string())
+                    })?;
                     let val_expr = parse_expression(val_pair)?;
                     MapProjectionItem::LiteralEntry(key, val_expr)
                 }
@@ -1515,7 +1517,7 @@ fn parse_map_projection_items(
                     return Err(CypherError::ParseError(format!(
                         "Unexpected map projection item: {:?}",
                         item_inner.as_rule()
-                    )))
+                    )));
                 }
             };
             items.push(item);
@@ -1711,7 +1713,9 @@ fn parse_case_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression
     })
 }
 
-fn parse_pattern_comprehension(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {
+fn parse_pattern_comprehension(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Expression, CypherError> {
     // "[" ~ pattern_element ~ (where_kw ~ expression)? ~ pipe_op ~ expression ~ "]"
     let mut pattern = None;
     let mut predicate = None;

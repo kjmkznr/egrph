@@ -2534,7 +2534,13 @@ fn pc_walk_chain(
         {
             continue;
         }
-        if !exists_rel_properties_match(edge, &step.relationship.properties, &scope, params, storage)? {
+        if !exists_rel_properties_match(
+            edge,
+            &step.relationship.properties,
+            &scope,
+            params,
+            storage,
+        )? {
             continue;
         }
         let next_id = match step.relationship.direction {
