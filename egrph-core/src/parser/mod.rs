@@ -1359,6 +1359,18 @@ fn parse_postfix_expression(pair: pest::iterators::Pair<Rule>) -> Result<Express
                             _ => {}
                         }
                     }
+                    Rule::map_projection_suffix => {
+                        let base = expr.take().ok_or_else(|| {
+                            CypherError::ParseError(
+                                "Expected expression before map projection".to_string(),
+                            )
+                        })?;
+                        let items = parse_map_projection_items(op_inner)?;
+                        expr = Some(Expression::MapProjection {
+                            expr: Box::new(base),
+                            items,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -1457,6 +1469,58 @@ fn parse_atom(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherErr
             inner.as_rule()
         ))),
     }
+}
+
+fn parse_map_projection_items(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Vec<MapProjectionItem>, CypherError> {
+    let mut items = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::map_projection_item {
+            let item_inner = inner
+                .into_inner()
+                .next()
+                .ok_or_else(|| CypherError::ParseError("Empty map projection item".to_string()))?;
+            let item = match item_inner.as_rule() {
+                Rule::all_properties_selector => MapProjectionItem::AllPropertiesSelector,
+                Rule::property_selector => {
+                    let name = item_inner
+                        .into_inner()
+                        .next()
+                        .ok_or_else(|| {
+                            CypherError::ParseError("Missing property name".to_string())
+                        })?
+                        .as_str()
+                        .to_string();
+                    MapProjectionItem::PropertySelector(name)
+                }
+                Rule::literal_entry => {
+                    let mut parts = item_inner.into_inner();
+                    let key = parts
+                        .next()
+                        .ok_or_else(|| CypherError::ParseError("Missing literal entry key".to_string()))?
+                        .as_str()
+                        .to_string();
+                    let val_pair = parts
+                        .next()
+                        .ok_or_else(|| CypherError::ParseError("Missing literal entry value".to_string()))?;
+                    let val_expr = parse_expression(val_pair)?;
+                    MapProjectionItem::LiteralEntry(key, val_expr)
+                }
+                Rule::variable_selector => {
+                    MapProjectionItem::VariableSelector(item_inner.as_str().to_string())
+                }
+                _ => {
+                    return Err(CypherError::ParseError(format!(
+                        "Unexpected map projection item: {:?}",
+                        item_inner.as_rule()
+                    )))
+                }
+            };
+            items.push(item);
+        }
+    }
+    Ok(items)
 }
 
 fn parse_exists_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, CypherError> {

@@ -291,6 +291,35 @@ pub fn eval_with_params(
             CypherValue::Boolean(eval_exists(pattern, record, params, storage)?)
         }
         Expression::Parameter(name) => params.get(name).cloned().unwrap_or(CypherValue::Null),
+        Expression::MapProjection { expr, items } => {
+            let base = eval_with_params(expr, record, params, storage)?;
+            if matches!(base, CypherValue::Null) {
+                return Ok(CypherValue::Null);
+            }
+            let mut result: HashMap<String, CypherValue> = HashMap::new();
+            for item in items {
+                match item {
+                    MapProjectionItem::PropertySelector(name) => {
+                        result.insert(name.clone(), get_property(&base, name));
+                    }
+                    MapProjectionItem::AllPropertiesSelector => {
+                        expand_all_properties(&base, &mut result);
+                    }
+                    MapProjectionItem::LiteralEntry(key, val_expr) => {
+                        result.insert(
+                            key.clone(),
+                            eval_with_params(val_expr, record, params, storage)?,
+                        );
+                    }
+                    MapProjectionItem::VariableSelector(var_name) => {
+                        if let Some(val) = record.get(var_name) {
+                            expand_all_properties(val, &mut result);
+                        }
+                    }
+                }
+            }
+            CypherValue::Map(result)
+        }
     })
 }
 
@@ -361,6 +390,27 @@ pub fn property_value_to_cypher(pv: &PropertyValue) -> CypherValue {
         PropertyValue::Int(i) => CypherValue::Integer(*i),
         PropertyValue::Float(f) => CypherValue::Float(*f),
         PropertyValue::Bool(b) => CypherValue::Boolean(*b),
+    }
+}
+
+fn expand_all_properties(value: &CypherValue, out: &mut HashMap<String, CypherValue>) {
+    match value {
+        CypherValue::Node(node) => {
+            for (k, v) in &node.properties {
+                out.insert(k.clone(), property_value_to_cypher(v));
+            }
+        }
+        CypherValue::Relationship(edge) => {
+            for (k, v) in &edge.properties {
+                out.insert(k.clone(), property_value_to_cypher(v));
+            }
+        }
+        CypherValue::Map(map) => {
+            for (k, v) in map {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        _ => {}
     }
 }
 

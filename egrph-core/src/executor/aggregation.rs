@@ -106,6 +106,15 @@ fn expr_contains_aggregation(expr: &Expression) -> bool {
         | Expression::Variable(_)
         | Expression::Parameter(_)
         | Expression::Exists { .. } => false,
+        Expression::MapProjection { expr: e, items } => {
+            expr_contains_aggregation(e)
+                || items.iter().any(|item| match item {
+                    crate::ast::MapProjectionItem::LiteralEntry(_, val_expr) => {
+                        expr_contains_aggregation(val_expr)
+                    }
+                    _ => false,
+                })
+        }
         Expression::FilterPredicate {
             list, predicate, ..
         } => expr_contains_aggregation(list) || expr_contains_aggregation(predicate),

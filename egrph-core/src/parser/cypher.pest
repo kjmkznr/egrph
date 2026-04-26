@@ -177,13 +177,26 @@ unary_op = { "-" | "+" }
 
 // Postfix: property access, subscript (dynamic property / list index / list slice), null predicate
 postfix_expression = { atom ~ postfix_op* ~ null_predicate? }
-postfix_op = { property_lookup | subscript }
+postfix_op = { property_lookup | subscript | map_projection_suffix }
 property_lookup = { "." ~ IDENTIFIER }
 subscript = { "[" ~ subscript_content ~ "]" }
 subscript_content = { slice_range | expression }
 dotdot     = { ".." }
 slice_range = { expression? ~ dotdot ~ expression? }
 null_predicate = { is_kw ~ not_kw? ~ null_kw }
+
+// Map Projection: expr { .prop, .*, key: expr, variable }
+map_projection_suffix = { "{" ~ (map_projection_item ~ ("," ~ map_projection_item)*)? ~ "}" }
+map_projection_item = {
+    all_properties_selector
+  | property_selector
+  | literal_entry
+  | variable_selector
+}
+all_properties_selector = { "." ~ "*" }
+property_selector = { "." ~ IDENTIFIER }
+literal_entry = { IDENTIFIER ~ ":" ~ expression }
+variable_selector = { IDENTIFIER }
 
 // Word-boundary keyword rules for expression operators (to prevent partial matches)
 or_kw  = @{ ^"OR" ~ !ASCII_ALPHANUMERIC }

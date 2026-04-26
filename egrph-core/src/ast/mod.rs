@@ -355,6 +355,23 @@ pub enum Expression {
     },
     /// Parameter reference: $param
     Parameter(String),
+    /// Map Projection: expr { .name, .*, key: expr, variable }
+    MapProjection {
+        expr: Box<Expression>,
+        items: Vec<MapProjectionItem>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum MapProjectionItem {
+    /// .property_name — extract a specific property
+    PropertySelector(String),
+    /// .* — extract all properties
+    AllPropertiesSelector,
+    /// key: expression — computed entry
+    LiteralEntry(String, Expression),
+    /// variable — include all properties of the named variable
+    VariableSelector(String),
 }
 
 #[derive(Debug, Clone)]
