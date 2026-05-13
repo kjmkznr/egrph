@@ -674,6 +674,20 @@ fn execute_to_records<S: StorageBackend>(
             params,
         ),
 
+        LogicalPlan::BuildPath {
+            input,
+            path_variable,
+            start_variable,
+            segments,
+        } => execute_build_path(
+            input,
+            path_variable,
+            start_variable,
+            segments,
+            storage,
+            params,
+        ),
+
         LogicalPlan::CreateConstraint {
             label,
             properties,
@@ -2083,6 +2097,119 @@ fn execute_var_length_expand<S: StorageBackend>(
                 }
             }
         }
+    }
+
+    Ok((cols, result_records))
+}
+
+/// Materialize `path_variable` as a `CypherValue::Path` on each input row by
+/// walking the variables bound by upstream Expand/VarLengthExpand steps.
+///
+/// For a fixed-length hop the relationship variable holds a single
+/// `Relationship`; for a variable-length hop it holds a `List` of relationships
+/// and we infer intermediate nodes by chasing the edge's endpoints relative to
+/// the running "current" node.  The final endpoint of each segment must match
+/// the bound `dst_variable` (this is true by construction for both Expand and
+/// VarLengthExpand).
+fn execute_build_path<S: StorageBackend>(
+    input: &LogicalPlan,
+    path_variable: &str,
+    start_variable: &str,
+    segments: &[crate::planner::plan::PathSegment],
+    storage: &mut S,
+    params: &Parameters,
+) -> Result<(Vec<String>, Vec<Record>), CypherError> {
+    let (mut cols, input_records) = execute_to_records(input, storage, params)?;
+
+    if !cols.contains(&path_variable.to_string()) {
+        cols.push(path_variable.to_string());
+    }
+
+    let mut result_records = Vec::with_capacity(input_records.len());
+    for mut rec in input_records {
+        let start_node = match rec.get(start_variable) {
+            Some(CypherValue::Node(n)) => n.clone(),
+            _ => {
+                // Start variable failed to bind (e.g. OPTIONAL MATCH miss);
+                // propagate NULL for the path so the row still survives.
+                rec.insert(path_variable.to_string(), CypherValue::Null);
+                result_records.push(rec);
+                continue;
+            }
+        };
+
+        let mut nodes: Vec<Node> = Vec::with_capacity(segments.len() + 1);
+        let mut relationships: Vec<Edge> = Vec::with_capacity(segments.len());
+        nodes.push(start_node);
+
+        let mut aborted = false;
+        for seg in segments {
+            let rel_val = match rec.get(&seg.rel_variable) {
+                Some(v) => v,
+                None => {
+                    aborted = true;
+                    break;
+                }
+            };
+            match (seg.is_var_length, rel_val) {
+                (false, CypherValue::Relationship(edge)) => {
+                    let edge = edge.clone();
+                    let cur_id = nodes.last().expect("path always has a current node").id;
+                    let next_id = if edge.src == cur_id {
+                        edge.dst
+                    } else {
+                        edge.src
+                    };
+                    let Some(next_node) = storage.get_node(next_id) else {
+                        aborted = true;
+                        break;
+                    };
+                    relationships.push(edge);
+                    nodes.push(next_node);
+                }
+                (true, CypherValue::List(edges)) => {
+                    for ev in edges {
+                        let CypherValue::Relationship(edge) = ev else {
+                            aborted = true;
+                            break;
+                        };
+                        let edge = edge.clone();
+                        let cur_id = nodes.last().expect("path always has a current node").id;
+                        let next_id = if edge.src == cur_id {
+                            edge.dst
+                        } else {
+                            edge.src
+                        };
+                        let Some(next_node) = storage.get_node(next_id) else {
+                            aborted = true;
+                            break;
+                        };
+                        relationships.push(edge);
+                        nodes.push(next_node);
+                    }
+                    if aborted {
+                        break;
+                    }
+                }
+                _ => {
+                    aborted = true;
+                    break;
+                }
+            }
+        }
+
+        if aborted {
+            rec.insert(path_variable.to_string(), CypherValue::Null);
+        } else {
+            rec.insert(
+                path_variable.to_string(),
+                CypherValue::Path(Path {
+                    nodes,
+                    relationships,
+                }),
+            );
+        }
+        result_records.push(rec);
     }
 
     Ok((cols, result_records))

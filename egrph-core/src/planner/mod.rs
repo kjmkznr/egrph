@@ -132,7 +132,6 @@ fn plan_match_scan(
             let variable = node_pattern
                 .variable
                 .clone()
-                .or_else(|| part.variable.clone())
                 .unwrap_or_else(|| format!("__egrph_anon_{}__", part_idx));
 
             let mut current = LogicalPlan::ScanNodes {
@@ -162,12 +161,19 @@ fn plan_match_scan(
             Ok(current)
         }
         PatternElement::Chain { start, elements } => {
+            // When the user wrote `p = (...)`, we must bind a Path value to `p`
+            // at the end of the chain.  This is independent of the start node's
+            // identifier — in particular, the path variable must NOT leak into
+            // the node namespace as a fallback name for an anonymous start node
+            // (which would shadow `p` with a Node value).
+            let path_variable = part.variable.clone();
+            let needs_path = path_variable.is_some();
+
             // Start with a node scan for the start node
             let start_label = start.labels.first().cloned();
             let start_var = start
                 .variable
                 .clone()
-                .or_else(|| part.variable.clone())
                 .unwrap_or_else(|| format!("__egrph_anon_start_{}__", part_idx));
 
             let mut current = LogicalPlan::ScanNodes {
@@ -194,13 +200,18 @@ fn plan_match_scan(
             // Add property filters for the start node
             current = add_property_filters(current, &start_var, &start.properties);
 
+            let mut segments: Vec<crate::planner::plan::PathSegment> =
+                Vec::with_capacity(elements.len());
+
             // Chain expansions for each relationship + target node
             for (i, chain_elem) in elements.iter().enumerate() {
                 // If the relationship has inline properties but no explicit variable,
                 // assign an anonymous variable so the filter can reference the edge.
+                // When a path variable is bound we also need to materialize the
+                // relationship binding so BuildPath can walk it.
                 let effective_rel_var = chain_elem.relationship.variable.clone().or_else(|| {
-                    if chain_elem.relationship.properties.is_some() {
-                        Some(format!("__egrph_anon_rel_{}__", i))
+                    if chain_elem.relationship.properties.is_some() || needs_path {
+                        Some(format!("__egrph_anon_rel_{}_{}__", part_idx, i))
                     } else {
                         None
                     }
@@ -209,7 +220,7 @@ fn plan_match_scan(
                     .node
                     .variable
                     .clone()
-                    .unwrap_or_else(|| format!("__egrph_anon_dst_{}__", i));
+                    .unwrap_or_else(|| format!("__egrph_anon_dst_{}_{}__", part_idx, i));
 
                 let src_var = if i == 0 {
                     start_var.clone()
@@ -218,9 +229,10 @@ fn plan_match_scan(
                         .node
                         .variable
                         .clone()
-                        .unwrap_or_else(|| format!("__egrph_anon_dst_{}__", i - 1))
+                        .unwrap_or_else(|| format!("__egrph_anon_dst_{}_{}__", part_idx, i - 1))
                 };
 
+                let is_var_length = chain_elem.relationship.range.is_some();
                 if let Some(range) = &chain_elem.relationship.range {
                     // Variable-length relationship: (a)-[*min..max]->(b)
                     let min_hops = range.min.unwrap_or(1);
@@ -257,18 +269,13 @@ fn plan_match_scan(
 
                 // If the target node has label filters, add a filter for each label
                 for label in &chain_elem.node.labels {
-                    let dst_name = chain_elem
-                        .node
-                        .variable
-                        .clone()
-                        .unwrap_or_else(|| format!("__egrph_anon_dst_{}__", i));
                     current = LogicalPlan::Filter {
                         input: Box::new(current),
                         predicate: Expression::FunctionCall {
                             name: "__has_label".to_string(),
                             distinct: false,
                             args: vec![
-                                Expression::Variable(dst_name),
+                                Expression::Variable(dst_var.clone()),
                                 Expression::Literal(Literal::String(label.clone())),
                             ],
                         },
@@ -277,6 +284,25 @@ fn plan_match_scan(
 
                 // Add property filters for the target node
                 current = add_property_filters(current, &dst_var, &chain_elem.node.properties);
+
+                if needs_path {
+                    segments.push(crate::planner::plan::PathSegment {
+                        rel_variable: effective_rel_var
+                            .clone()
+                            .expect("rel variable is forced when needs_path is true"),
+                        is_var_length,
+                        dst_variable: dst_var.clone(),
+                    });
+                }
+            }
+
+            if let Some(pv) = path_variable {
+                current = LogicalPlan::BuildPath {
+                    input: Box::new(current),
+                    path_variable: pv,
+                    start_variable: start_var,
+                    segments,
+                };
             }
 
             Ok(current)

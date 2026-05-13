@@ -663,15 +663,13 @@ fn parse_merge_clause(pair: pest::iterators::Pair<Rule>) -> Result<Clause, Cyphe
     let element = pattern_element
         .ok_or_else(|| CypherError::ParseError("Missing pattern in MERGE".to_string()))?;
 
-    // Wrap in a PatternPart and Pattern
-    let variable = match &element {
-        PatternElement::Node(np) => np.variable.clone(),
-        PatternElement::Chain { start, .. } => start.variable.clone(),
-        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => None,
-    };
-
+    // MERGE grammar does not accept a `p = pattern` prefix, so there is never an
+    // explicit path-variable binding to record here.
     let pattern = Pattern {
-        parts: vec![PatternPart { variable, element }],
+        parts: vec![PatternPart {
+            variable: None,
+            element,
+        }],
     };
 
     Ok(Clause::Merge(MergeClause {
@@ -796,14 +794,10 @@ fn parse_pattern(pair: pest::iterators::Pair<Rule>) -> Result<PatternPart, Cyphe
     let element =
         element.ok_or_else(|| CypherError::ParseError("Missing pattern element".to_string()))?;
 
-    // If the variable is not explicitly set via "p = (...)",
-    // use the node's variable as the pattern part variable
-    let variable = variable.or_else(|| match &element {
-        PatternElement::Node(np) => np.variable.clone(),
-        PatternElement::Chain { start, .. } => start.variable.clone(),
-        PatternElement::ShortestPath { .. } | PatternElement::AllShortestPaths { .. } => None,
-    });
-
+    // `variable` is `Some(_)` only when the user wrote `p = pattern` explicitly.
+    // It denotes a path variable bound to the whole pattern (Path value), not
+    // an alias for the start node — downstream consumers must not confuse the
+    // two namespaces.
     Ok(PatternPart { variable, element })
 }
 

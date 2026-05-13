@@ -4116,4 +4116,191 @@ mod tests {
         let result = g.execute("MATCH p = shortestPath((a:SP)-[:E]->(b:SP)) RETURN p");
         assert!(result.is_err());
     }
+
+    // ── Path-variable binding (regular MATCH) ──────────────────────────────────
+
+    #[test]
+    fn test_path_variable_single_hop() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:PV {n:'A'})-[:E]->(:PV {n:'B'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH p = (a:PV {n:'A'})-[r]->(b:PV {n:'B'}) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => {
+                assert_eq!(path.nodes.len(), 2);
+                assert_eq!(path.relationships.len(), 1);
+                assert_eq!(
+                    path.nodes[0].properties.get("n"),
+                    Some(&PropertyValue::String("A".to_string()))
+                );
+                assert_eq!(
+                    path.nodes[1].properties.get("n"),
+                    Some(&PropertyValue::String("B".to_string()))
+                );
+                assert_eq!(path.relationships[0].src, path.nodes[0].id);
+                assert_eq!(path.relationships[0].dst, path.nodes[1].id);
+            }
+            other => panic!("Expected Path, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_variable_var_length_length() {
+        let mut g = Graph::new();
+        g.execute(
+            "CREATE (:VL {n:'A'})-[:E]->(:VL {n:'B'})-[:E]->(:VL {n:'C'})-[:E]->(:VL {n:'D'})",
+        )
+        .unwrap();
+        let result = g
+            .execute("MATCH p = (a:VL {n:'A'})-[*1..3]->(b:VL {n:'D'}) RETURN length(p)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Integer(n) => assert_eq!(*n, 3),
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_variable_nodes_relationships_length() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:NR {n:'A'})-[:E]->(:NR {n:'B'})")
+            .unwrap();
+        let result = g
+            .execute(
+                "MATCH p = (a:NR {n:'A'})-[r]->(b:NR {n:'B'}) RETURN nodes(p), relationships(p), length(p)",
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::List(nodes) => {
+                assert_eq!(nodes.len(), 2);
+                for v in nodes {
+                    assert!(matches!(v, CypherValue::Node(_)));
+                }
+            }
+            other => panic!("Expected nodes(p) to be a List, got {:?}", other),
+        }
+        match &result.rows[0].values[1] {
+            CypherValue::List(rels) => {
+                assert_eq!(rels.len(), 1);
+                assert!(matches!(rels[0], CypherValue::Relationship(_)));
+            }
+            other => panic!("Expected relationships(p) to be a List, got {:?}", other),
+        }
+        match &result.rows[0].values[2] {
+            CypherValue::Integer(n) => assert_eq!(*n, 1),
+            other => panic!("Expected length(p) to be Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_variable_anonymous_start_node() {
+        // The start node has no variable; the path variable `p` must still
+        // bind to a full path that includes the start node.  Crucially the
+        // path variable must not collide with the (missing) start node name.
+        let mut g = Graph::new();
+        g.execute("CREATE (:AN {n:'A'})-[:E]->(:AN {n:'B'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH p = ()-[r]->(b:AN {n:'B'}) RETURN p, nodes(p)")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => {
+                assert_eq!(path.nodes.len(), 2);
+                assert_eq!(path.relationships.len(), 1);
+                assert_eq!(
+                    path.nodes[0].properties.get("n"),
+                    Some(&PropertyValue::String("A".to_string()))
+                );
+                assert_eq!(
+                    path.nodes[1].properties.get("n"),
+                    Some(&PropertyValue::String("B".to_string()))
+                );
+            }
+            other => panic!("Expected Path, got {:?}", other),
+        }
+        match &result.rows[0].values[1] {
+            CypherValue::List(nodes) => assert_eq!(nodes.len(), 2),
+            other => panic!("Expected List, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_variable_multiple_in_one_match() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:MP {n:'A'})-[:E]->(:MP {n:'B'})-[:E]->(:MP {n:'C'})")
+            .unwrap();
+        let result = g
+            .execute(
+                "MATCH p1 = (a:MP {n:'A'})-[r1]->(b:MP {n:'B'}), p2 = (b)-[r2]->(c:MP {n:'C'}) \
+                 RETURN p1, p2",
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => {
+                assert_eq!(path.nodes.len(), 2);
+                assert_eq!(path.relationships.len(), 1);
+                assert_eq!(
+                    path.nodes[0].properties.get("n"),
+                    Some(&PropertyValue::String("A".to_string()))
+                );
+                assert_eq!(
+                    path.nodes[1].properties.get("n"),
+                    Some(&PropertyValue::String("B".to_string()))
+                );
+            }
+            other => panic!("Expected p1 Path, got {:?}", other),
+        }
+        match &result.rows[0].values[1] {
+            CypherValue::Path(path) => {
+                assert_eq!(path.nodes.len(), 2);
+                assert_eq!(path.relationships.len(), 1);
+                assert_eq!(
+                    path.nodes[0].properties.get("n"),
+                    Some(&PropertyValue::String("B".to_string()))
+                );
+                assert_eq!(
+                    path.nodes[1].properties.get("n"),
+                    Some(&PropertyValue::String("C".to_string()))
+                );
+            }
+            other => panic!("Expected p2 Path, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_variable_multi_segment_chain() {
+        let mut g = Graph::new();
+        g.execute("CREATE (:MS {n:'A'})-[:E]->(:MS {n:'B'})-[:E]->(:MS {n:'C'})")
+            .unwrap();
+        let result = g
+            .execute("MATCH p = (a:MS {n:'A'})-[r1]->(b)-[r2]->(c:MS {n:'C'}) RETURN p")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        match &result.rows[0].values[0] {
+            CypherValue::Path(path) => {
+                assert_eq!(path.nodes.len(), 3);
+                assert_eq!(path.relationships.len(), 2);
+                assert_eq!(
+                    path.nodes[0].properties.get("n"),
+                    Some(&PropertyValue::String("A".to_string()))
+                );
+                assert_eq!(
+                    path.nodes[1].properties.get("n"),
+                    Some(&PropertyValue::String("B".to_string()))
+                );
+                assert_eq!(
+                    path.nodes[2].properties.get("n"),
+                    Some(&PropertyValue::String("C".to_string()))
+                );
+            }
+            other => panic!("Expected Path, got {:?}", other),
+        }
+    }
 }

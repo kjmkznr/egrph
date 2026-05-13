@@ -3,6 +3,21 @@ use crate::ast::{
     RemoveItem, ReturnItem, SetItem, SortItem,
 };
 
+/// One hop in a `BuildPath` reconstruction.
+///
+/// `rel_variable` is always bound by the upstream Expand/VarLengthExpand.  For a
+/// fixed-length hop it holds a single `CypherValue::Relationship`; for a
+/// variable-length hop it holds a `CypherValue::List` of relationships and we
+/// reconstruct intermediate nodes by walking edge endpoints from the running
+/// "current node" of the path.  `dst_variable` is the node bound at the end of
+/// the segment.
+#[derive(Debug, Clone)]
+pub struct PathSegment {
+    pub rel_variable: String,
+    pub is_var_length: bool,
+    pub dst_variable: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum LogicalPlan {
     /// Create a single node with labels and properties.
@@ -166,6 +181,20 @@ pub enum LogicalPlan {
         label: String,
         properties: Vec<String>,
         constraint_type: ConstraintType,
+    },
+
+    /// Materialize a Path value from already-bound chain variables.
+    ///
+    /// Emitted when a MATCH pattern is prefixed with a path variable
+    /// (e.g. `MATCH p = (a)-[r]->(b)`).  The chain itself is planned as
+    /// regular Expand / VarLengthExpand steps that bind node and relationship
+    /// variables along the way; this node walks those bindings on each row
+    /// and inserts a `CypherValue::Path` under `path_variable`.
+    BuildPath {
+        input: Box<LogicalPlan>,
+        path_variable: String,
+        start_variable: String,
+        segments: Vec<PathSegment>,
     },
 
     /// shortestPath / allShortestPaths BFS between two bound nodes.
