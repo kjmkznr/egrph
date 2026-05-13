@@ -12,11 +12,19 @@ unsigned long long graph_create_node(CGraph* ptr);
 long long graph_create_edge(CGraph* ptr, const char* label, unsigned long long src, unsigned long long dst);
 size_t graph_get_node_count(const CGraph* ptr);
 size_t graph_get_edge_count(const CGraph* ptr);
+char* graph_execute(CGraph* ptr, const char* query);
+char* graph_execute_with_params(CGraph* ptr, const char* query, const char* params_json);
 char* graph_export_cypher(const CGraph* ptr);
 void graph_free_string(char* s);
 */
 import "C"
-import "unsafe"
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"unsafe"
+)
 
 type Graph struct {
 	ptr *C.CGraph
@@ -52,4 +60,52 @@ func (g *Graph) ExportCypher() string {
 	cStr := C.graph_export_cypher(g.ptr)
 	defer C.graph_free_string(cStr)
 	return C.GoString(cStr)
+}
+
+// Execute runs a Cypher query and returns the raw result JSON
+// (`{"columns":[...],"rows":[[...]]}`). If the underlying engine reports an
+// error, it is returned as a Go error and the JSON is empty.
+func (g *Graph) Execute(query string) (string, error) {
+	cQ := C.CString(query)
+	defer C.free(unsafe.Pointer(cQ))
+	cStr := C.graph_execute(g.ptr, cQ)
+	defer C.graph_free_string(cStr)
+	return parseExecuteResult(C.GoString(cStr))
+}
+
+// ExecuteWithParams runs a Cypher query with named parameters ($name syntax).
+// `params` is marshaled to JSON; supported value kinds are null, bool, numbers,
+// strings, slices, and maps with string keys. Returns the same raw result JSON
+// as Execute.
+func (g *Graph) ExecuteWithParams(query string, params map[string]interface{}) (string, error) {
+	if params == nil {
+		params = map[string]interface{}{}
+	}
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	cQ := C.CString(query)
+	defer C.free(unsafe.Pointer(cQ))
+	cP := C.CString(string(paramsJSON))
+	defer C.free(unsafe.Pointer(cP))
+	cStr := C.graph_execute_with_params(g.ptr, cQ, cP)
+	defer C.graph_free_string(cStr)
+	return parseExecuteResult(C.GoString(cStr))
+}
+
+// parseExecuteResult turns the FFI return string into (json, error). The C ABI
+// signals errors with a top-level `{"error": "..."}` object; everything else is
+// passed through verbatim.
+func parseExecuteResult(s string) (string, error) {
+	if strings.HasPrefix(s, `{"error":`) {
+		var e struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(s), &e); err == nil && e.Error != "" {
+			return "", errors.New(e.Error)
+		}
+		return "", errors.New(s)
+	}
+	return s, nil
 }
