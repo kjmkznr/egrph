@@ -361,10 +361,10 @@ impl StorageBackend for SledStorage {
         // O(1) rather than O(label-set). Fall back to the label scan (or all
         // nodes) when there are no properties to seed from.
         let candidates: Vec<Node> = if !properties.is_empty() {
-            let mut candidate_ids: Option<HashSet<NodeId>> = None;
+            let mut candidate_ids: Option<std::collections::HashSet<NodeId>> = None;
             for (key, val) in properties {
                 let prefix = prop_idx_prefix(key, val);
-                let ids: HashSet<NodeId> = self
+                let ids: std::collections::HashSet<NodeId> = self
                     .prop_idx
                     .scan_prefix(&prefix)
                     .filter_map(|r| r.ok())
