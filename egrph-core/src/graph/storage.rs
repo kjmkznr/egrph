@@ -221,7 +221,32 @@ impl StorageBackend for MemoryStorage {
         labels: &[String],
         properties: &HashMap<String, PropertyValue>,
     ) -> Vec<NodeId> {
-        let candidates: Vec<NodeId> = if let Some(first_label) = labels.first() {
+        // Seed the candidate set from the property index when property
+        // constraints are present: intersect the per-property posting lists
+        // (O(1) per indexed value) instead of scanning the whole label set.
+        // This mirrors `match_nodes_with_props` and makes MERGE-by-key O(1)
+        // rather than O(label-set). Falls back to the label scan (or all
+        // nodes) when there are no property constraints to seed from.
+        let candidates: Vec<NodeId> = if !properties.is_empty() {
+            let mut acc: Option<HashSet<NodeId>> = None;
+            for (key, val) in properties {
+                let vkey = prop_value_key(val);
+                let ids: HashSet<NodeId> = self
+                    .property_index
+                    .get(key)
+                    .and_then(|val_map| val_map.get(&vkey))
+                    .cloned()
+                    .unwrap_or_default();
+                acc = Some(match acc {
+                    None => ids,
+                    Some(existing) => existing.intersection(&ids).copied().collect(),
+                });
+            }
+            match acc {
+                Some(ids) => ids.into_iter().collect(),
+                None => return Vec::new(),
+            }
+        } else if let Some(first_label) = labels.first() {
             match self.label_index.get(first_label) {
                 Some(ids) => ids.iter().copied().collect(),
                 None => return Vec::new(),
@@ -230,6 +255,9 @@ impl StorageBackend for MemoryStorage {
             self.nodes.keys().copied().collect()
         };
 
+        // Re-filter exactly: the index is keyed by `prop_value_key`, so confirm
+        // every label and property with the precise comparison. The candidate
+        // set is tiny (typically one node for a unique key), so this is cheap.
         candidates
             .into_iter()
             .filter(|id| {
@@ -502,17 +530,26 @@ impl StorageBackend for MemoryStorage {
     ) -> Result<(), String> {
         if let Some(props) = self.unique_constraints.get(label)
             && props.contains(property)
-            && let Some(node_ids) = self.label_index.get(label)
         {
-            for &nid in node_ids {
-                if let Some(node) = self.nodes.get(&nid)
-                    && let Some(existing_val) = node.properties.get(property)
-                    && property_values_equal(existing_val, value)
-                {
-                    return Err(format!(
-                        "Unique constraint violation on {}:{}: value {:?} already exists",
-                        label, property, value
-                    ));
+            // Probe the property index for this exact value instead of scanning
+            // the whole label set, then confirm the label and value precisely.
+            let vkey = prop_value_key(value);
+            if let Some(node_ids) = self
+                .property_index
+                .get(property)
+                .and_then(|val_map| val_map.get(&vkey))
+            {
+                for &nid in node_ids {
+                    if let Some(node) = self.nodes.get(&nid)
+                        && node.labels.iter().any(|l| l == label)
+                        && let Some(existing_val) = node.properties.get(property)
+                        && property_values_equal(existing_val, value)
+                    {
+                        return Err(format!(
+                            "Unique constraint violation on {}:{}: value {:?} already exists",
+                            label, property, value
+                        ));
+                    }
                 }
             }
         }
