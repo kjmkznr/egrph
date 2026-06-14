@@ -355,7 +355,37 @@ impl StorageBackend for SledStorage {
         labels: &[String],
         properties: &HashMap<String, PropertyValue>,
     ) -> Vec<NodeId> {
-        let candidates: Vec<Node> = if let Some(first) = labels.first() {
+        // Seed from the property index when property constraints are present
+        // (intersect per-property posting lists) instead of scanning the whole
+        // label set, mirroring `match_nodes_with_props`. This makes MERGE-by-key
+        // O(1) rather than O(label-set). Fall back to the label scan (or all
+        // nodes) when there are no properties to seed from.
+        let candidates: Vec<Node> = if !properties.is_empty() {
+            let mut candidate_ids: Option<HashSet<NodeId>> = None;
+            for (key, val) in properties {
+                let prefix = prop_idx_prefix(key, val);
+                let ids: HashSet<NodeId> = self
+                    .prop_idx
+                    .scan_prefix(&prefix)
+                    .filter_map(|r| r.ok())
+                    .filter_map(|(k, _)| {
+                        let id_bytes = k.get(k.len().saturating_sub(8)..)?;
+                        if id_bytes.len() != 8 {
+                            return None;
+                        }
+                        Some(u64::from_be_bytes(id_bytes.try_into().ok()?))
+                    })
+                    .collect();
+                candidate_ids = Some(match candidate_ids {
+                    None => ids,
+                    Some(existing) => existing.intersection(&ids).copied().collect(),
+                });
+            }
+            match candidate_ids {
+                Some(ids) => ids.into_iter().filter_map(|id| self.get_node(id)).collect(),
+                None => return Vec::new(),
+            }
+        } else if let Some(first) = labels.first() {
             let prefix = label_prefix(first);
             self.label_idx
                 .scan_prefix(&prefix)
