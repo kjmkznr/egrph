@@ -1746,13 +1746,33 @@ fn expand_merge_candidate<S: StorageBackend>(
             _ => None,
         });
 
-    let edges = match elem.relationship.direction {
-        Direction::Outgoing => storage.outgoing_edges(prev_id),
-        Direction::Incoming => storage.incoming_edges(prev_id),
-        Direction::Undirected => {
-            let mut all = storage.outgoing_edges(prev_id);
-            all.extend(storage.incoming_edges(prev_id));
-            all
+    // When the destination is already bound and the relationship type is
+    // known, probe the endpoint index directly (O(1)) instead of scanning the
+    // source's entire adjacency. This is the common edge-MERGE case
+    // `(a)-[:R]->(b)` where both endpoints are bound, which otherwise costs
+    // O(degree of a) per MERGE and O(degree^2) over a hot source node.
+    let edges = if let Some(bid) = bound_dst.filter(|_| !rel_types.is_empty()) {
+        let mut v = Vec::new();
+        for rt in rel_types {
+            match elem.relationship.direction {
+                Direction::Outgoing => v.extend(storage.edges_between(prev_id, rt, bid)),
+                Direction::Incoming => v.extend(storage.edges_between(bid, rt, prev_id)),
+                Direction::Undirected => {
+                    v.extend(storage.edges_between(prev_id, rt, bid));
+                    v.extend(storage.edges_between(bid, rt, prev_id));
+                }
+            }
+        }
+        v
+    } else {
+        match elem.relationship.direction {
+            Direction::Outgoing => storage.outgoing_edges(prev_id),
+            Direction::Incoming => storage.incoming_edges(prev_id),
+            Direction::Undirected => {
+                let mut all = storage.outgoing_edges(prev_id);
+                all.extend(storage.incoming_edges(prev_id));
+                all
+            }
         }
     };
 
