@@ -140,7 +140,9 @@ fn execute_to_records<S: StorageBackend>(
                 .into_iter()
                 .map(|node| {
                     let mut rec = Record::new();
-                    rec.insert(variable.clone(), CypherValue::Node(node.clone()));
+                    // `node` is already owned out of the Vec — move it in rather
+                    // than cloning the whole node a second time.
+                    rec.insert(variable.clone(), CypherValue::Node(node));
                     rec
                 })
                 .collect();

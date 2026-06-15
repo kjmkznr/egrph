@@ -156,6 +156,15 @@ pub fn eval_with_params(
         Expression::Literal(lit) => eval_literal(lit, record, params, storage)?,
         Expression::Variable(name) => record.get(name).cloned().unwrap_or(CypherValue::Null),
         Expression::Property(base_expr, prop_name) => {
+            // Fast path for `var.prop`: read the field by borrowing the bound
+            // value in the record instead of cloning the whole Node/Relationship
+            // (whose properties map is large) just to extract one property. This
+            // is the hot path for filters and projections over scanned rows.
+            if let Expression::Variable(name) = base_expr.as_ref() {
+                if let Some(base) = record.get(name) {
+                    return Ok(get_property(base, prop_name));
+                }
+            }
             let base = eval_with_params(base_expr, record, params, storage)?;
             get_property(&base, prop_name)
         }
