@@ -23,6 +23,10 @@ pub struct MemoryStorage {
     /// Property index: prop_name -> prop_value_key -> set of NodeIds.
     /// Enables O(1) property lookup instead of O(N) full scan.
     property_index: HashMap<String, HashMap<String, HashSet<NodeId>>>,
+    /// Edge adjacency index: (src, label, dst) -> edge ids. Enables O(1)
+    /// relationship lookup by endpoints+type (e.g. MERGE of an edge between two
+    /// already-bound nodes) instead of scanning the source's whole adjacency.
+    edge_adjacency: HashMap<(NodeId, String, NodeId), Vec<EdgeId>>,
 }
 
 /// Stable string key for a `PropertyValue`, used as the inner key of the
@@ -38,6 +42,17 @@ pub type GraphStorage = MemoryStorage;
 impl MemoryStorage {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Drop one edge from the (src, label, dst) adjacency index.
+    fn remove_edge_adjacency(&mut self, edge: &Edge) {
+        let key = (edge.src, edge.label.clone(), edge.dst);
+        if let Some(ids) = self.edge_adjacency.get_mut(&key) {
+            ids.retain(|e| *e != edge.id);
+            if ids.is_empty() {
+                self.edge_adjacency.remove(&key);
+            }
+        }
     }
 }
 
@@ -88,6 +103,10 @@ impl StorageBackend for MemoryStorage {
         }
 
         let id = self.next_edge_id;
+        self.edge_adjacency
+            .entry((src, label.clone(), dst))
+            .or_default()
+            .push(id);
         let edge = Edge {
             id,
             label,
@@ -221,38 +240,41 @@ impl StorageBackend for MemoryStorage {
         labels: &[String],
         properties: &HashMap<String, PropertyValue>,
     ) -> Vec<NodeId> {
-        // Seed the candidate set from the property index when property
-        // constraints are present: intersect the per-property posting lists
-        // (O(1) per indexed value) instead of scanning the whole label set.
-        // This mirrors `match_nodes_with_props` and makes MERGE-by-key O(1)
-        // rather than O(label-set). Falls back to the label scan (or all
-        // nodes) when there are no property constraints to seed from.
-        let candidates: Vec<NodeId> = if !properties.is_empty() {
-            let mut acc: Option<HashSet<NodeId>> = None;
-            for (key, val) in properties {
-                let vkey = prop_value_key(val);
-                let ids: HashSet<NodeId> = self
-                    .property_index
-                    .get(key)
-                    .and_then(|val_map| val_map.get(&vkey))
-                    .cloned()
-                    .unwrap_or_default();
-                acc = Some(match acc {
-                    None => ids,
-                    Some(existing) => existing.intersection(&ids).copied().collect(),
-                });
-            }
-            match acc {
-                Some(ids) => ids.into_iter().collect(),
-                None => return Vec::new(),
-            }
-        } else if let Some(first_label) = labels.first() {
+        // Seed from the SMALLEST available index set, then filter exactly.
+        // Each property value's posting list and the first label's id-set are
+        // candidate seeds; we materialize whichever is smallest (HashSet::len
+        // is O(1)) and scan only that. This makes MERGE-by-key O(1) for unique
+        // keys AND stays O(label-set) when a property value is shared across
+        // many nodes of other labels — e.g. `MERGE (ip:IpAddress {ip})` where
+        // every LogEvent also carries that `ip`: the IpAddress label-set is the
+        // small seed, not the huge `ip` posting list. Any absent label or
+        // value means no match.
+        let mut best: Option<&HashSet<NodeId>> = None;
+        if let Some(first_label) = labels.first() {
             match self.label_index.get(first_label) {
-                Some(ids) => ids.iter().copied().collect(),
+                Some(ids) => best = Some(ids),
                 None => return Vec::new(),
             }
-        } else {
-            self.nodes.keys().copied().collect()
+        }
+        for (key, val) in properties {
+            let vkey = prop_value_key(val);
+            match self
+                .property_index
+                .get(key)
+                .and_then(|val_map| val_map.get(&vkey))
+            {
+                Some(ids) => {
+                    if best.is_none_or(|b| ids.len() < b.len()) {
+                        best = Some(ids);
+                    }
+                }
+                None => return Vec::new(),
+            }
+        }
+        let candidates: Vec<NodeId> = match best {
+            Some(ids) => ids.iter().copied().collect(),
+            // No labels and no properties: every node is a candidate.
+            None => self.nodes.keys().copied().collect(),
         };
 
         // Re-filter exactly: the index is keyed by `prop_value_key`, so confirm
@@ -469,6 +491,7 @@ impl StorageBackend for MemoryStorage {
                     {
                         inc.retain(|e| *e != eid);
                     }
+                    self.remove_edge_adjacency(&edge);
                 }
             }
         }
@@ -751,10 +774,22 @@ impl StorageBackend for MemoryStorage {
             if let Some(inc) = self.incoming.get_mut(&edge.dst) {
                 inc.retain(|e| *e != id);
             }
+            self.remove_edge_adjacency(&edge);
             Ok(())
         } else {
             Err(format!("Edge {} not found", id))
         }
+    }
+
+    fn edges_between(&self, src: NodeId, rel_type: &str, dst: NodeId) -> Vec<Edge> {
+        self.edge_adjacency
+            .get(&(src, rel_type.to_string(), dst))
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| self.edges.get(id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 

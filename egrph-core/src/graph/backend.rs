@@ -19,6 +19,18 @@ pub trait StorageBackend {
     fn outgoing_edges(&self, node_id: NodeId) -> Vec<Edge>;
     fn incoming_edges(&self, node_id: NodeId) -> Vec<Edge>;
 
+    /// Return edges from `src` to `dst` with relationship type `rel_type`.
+    /// Used to match a relationship between two already-bound nodes (e.g. the
+    /// edge MERGE in `(a)-[:R]->(b)`) without scanning `src`'s whole adjacency.
+    /// Implementations should override with an endpoint index for O(1) lookup;
+    /// the default falls back to scanning `outgoing_edges`.
+    fn edges_between(&self, src: NodeId, rel_type: &str, dst: NodeId) -> Vec<Edge> {
+        self.outgoing_edges(src)
+            .into_iter()
+            .filter(|e| e.label == rel_type && e.dst == dst)
+            .collect()
+    }
+
     /// Return edge IDs for outgoing edges of `node_id`.
     fn outgoing_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId>;
 
