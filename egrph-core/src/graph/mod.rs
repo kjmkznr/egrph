@@ -11,8 +11,19 @@ use crate::error::CypherError;
 use crate::executor::result::QueryResult;
 use std::collections::HashMap;
 
+/// Upper bound on cached query plans. Workloads reuse a small fixed set of
+/// query strings (ingest, rules, reads), so this caps memory against a caller
+/// that issues unboundedly many distinct query texts; once full, further new
+/// queries are planned per-call without being cached.
+const PLAN_CACHE_MAX: usize = 1024;
+
 pub struct Graph<S: StorageBackend = MemoryStorage> {
     pub(crate) storage: S,
+    /// Parse+plan cache keyed by the verbatim query string. A `LogicalPlan` is
+    /// a pure function of the query text (parameters bind at execution), so the
+    /// same string always yields the same plan. Avoids re-parsing/re-planning a
+    /// hot query (e.g. the ingest MERGE) on every call.
+    plan_cache: HashMap<String, crate::planner::plan::LogicalPlan>,
 }
 
 impl Default for Graph<MemoryStorage> {
@@ -25,6 +36,7 @@ impl Graph<MemoryStorage> {
     pub fn new() -> Self {
         Graph {
             storage: MemoryStorage::new(),
+            plan_cache: HashMap::new(),
         }
     }
 }
@@ -32,14 +44,15 @@ impl Graph<MemoryStorage> {
 impl<S: StorageBackend> Graph<S> {
     /// Construct a `Graph` backed by an arbitrary `StorageBackend`.
     pub fn new_with_storage(storage: S) -> Self {
-        Graph { storage }
+        Graph {
+            storage,
+            plan_cache: HashMap::new(),
+        }
     }
 
     /// New primary entry point: parse, plan, and execute a Cypher query.
     pub fn execute(&mut self, q: &str) -> Result<QueryResult, CypherError> {
-        let stmt = crate::parser::parse_with_return_extraction(q)?;
-        let plan = crate::planner::plan(&stmt)?;
-        crate::executor::execute(&plan, &mut self.storage)
+        self.execute_with_params(q, HashMap::new())
     }
 
     /// Execute a Cypher query with named parameters ($param syntax).
@@ -48,9 +61,19 @@ impl<S: StorageBackend> Graph<S> {
         q: &str,
         params: HashMap<String, CypherValue>,
     ) -> Result<QueryResult, CypherError> {
-        let stmt = crate::parser::parse_with_return_extraction(q)?;
-        let plan = crate::planner::plan(&stmt)?;
-        crate::executor::execute_with_params(&plan, &mut self.storage, params)
+        if !self.plan_cache.contains_key(q) {
+            let stmt = crate::parser::parse_with_return_extraction(q)?;
+            let plan = crate::planner::plan(&stmt)?;
+            if self.plan_cache.len() >= PLAN_CACHE_MAX {
+                // Cache saturated: run this plan without caching to bound memory.
+                return crate::executor::execute_with_params(&plan, &mut self.storage, params);
+            }
+            self.plan_cache.insert(q.to_string(), plan);
+        }
+        // Disjoint field borrows: `&self.plan_cache` for the plan, `&mut
+        // self.storage` for execution.
+        let plan = self.plan_cache.get(q).expect("plan present after insert");
+        crate::executor::execute_with_params(plan, &mut self.storage, params)
     }
 
     /// Legacy query method - preserved for backward compatibility.
