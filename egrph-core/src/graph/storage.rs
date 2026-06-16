@@ -1,10 +1,11 @@
 use super::backend::StorageBackend;
 use super::types::{Edge, EdgeId, Node, NodeId, PropertyValue};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct MemoryStorage {
-    pub(crate) nodes: HashMap<NodeId, Node>,
+    pub(crate) nodes: HashMap<NodeId, Arc<Node>>,
     pub(crate) edges: HashMap<EdgeId, Edge>,
     pub(crate) outgoing: HashMap<NodeId, Vec<EdgeId>>,
     pub(crate) incoming: HashMap<NodeId, Vec<EdgeId>>,
@@ -77,7 +78,7 @@ impl StorageBackend for MemoryStorage {
             labels: labels.clone(),
             properties,
         };
-        self.nodes.insert(id, node);
+        self.nodes.insert(id, Arc::new(node));
         for label in &labels {
             self.label_index
                 .entry(label.clone())
@@ -121,7 +122,7 @@ impl StorageBackend for MemoryStorage {
         Ok(id)
     }
 
-    fn get_node(&self, id: NodeId) -> Option<Node> {
+    fn get_node(&self, id: NodeId) -> Option<Arc<Node>> {
         self.nodes.get(&id).cloned()
     }
 
@@ -167,7 +168,7 @@ impl StorageBackend for MemoryStorage {
         self.incoming.get(&node_id).cloned().unwrap_or_default()
     }
 
-    fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
+    fn match_nodes(&self, label: Option<&str>) -> Vec<Arc<Node>> {
         match label {
             None => self.nodes.values().cloned().collect(),
             Some(l) => self
@@ -186,7 +187,7 @@ impl StorageBackend for MemoryStorage {
         &self,
         label: Option<&str>,
         props: &HashMap<String, PropertyValue>,
-    ) -> Vec<Node> {
+    ) -> Vec<Arc<Node>> {
         if props.is_empty() {
             return self.match_nodes(label);
         }
@@ -314,7 +315,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             // Remove old index entry.
             if let Some(old_val) = node.properties.get(&key) {
                 let old_vkey = prop_value_key(old_val);
@@ -342,7 +343,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             // Remove old index entries.
             for (key, val) in &node.properties {
                 let old_vkey = prop_value_key(val);
@@ -372,7 +373,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             for (k, v) in properties {
                 // Remove old index entry for this key if it exists.
                 if let Some(old_val) = node.properties.get(&k) {
@@ -404,7 +405,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn add_node_labels(&mut self, id: NodeId, labels: &[String]) {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             for label in labels {
                 if !node.labels.contains(label) {
                     node.labels.push(label.clone());
@@ -418,7 +419,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn remove_node_property(&mut self, id: NodeId, key: &str) {
-        if let Some(node) = self.nodes.get_mut(&id)
+        if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut)
             && let Some(val) = node.properties.remove(key)
         {
             let vkey = prop_value_key(&val);
@@ -431,7 +432,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn remove_node_labels(&mut self, id: NodeId, labels: &[String]) {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             for label in labels {
                 node.labels.retain(|l| l != label);
                 if let Some(set) = self.label_index.get_mut(label) {

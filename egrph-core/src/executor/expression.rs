@@ -160,10 +160,10 @@ pub fn eval_with_params(
             // value in the record instead of cloning the whole Node/Relationship
             // (whose properties map is large) just to extract one property. This
             // is the hot path for filters and projections over scanned rows.
-            if let Expression::Variable(name) = base_expr.as_ref() {
-                if let Some(base) = record.get(name) {
-                    return Ok(get_property(base, prop_name));
-                }
+            if let Expression::Variable(name) = base_expr.as_ref()
+                && let Some(base) = record.get(name)
+            {
+                return Ok(get_property(base, prop_name));
             }
             let base = eval_with_params(base_expr, record, params, storage)?;
             get_property(&base, prop_name)
@@ -1755,9 +1755,12 @@ fn eval_function(
             if let Some(arg) = args.first() {
                 let val = eval_with_params(arg, record, params, storage)?;
                 match val {
-                    CypherValue::Path(p) => {
-                        CypherValue::List(p.nodes.into_iter().map(CypherValue::Node).collect())
-                    }
+                    CypherValue::Path(p) => CypherValue::List(
+                        p.nodes
+                            .into_iter()
+                            .map(|n| CypherValue::Node(std::sync::Arc::new(n)))
+                            .collect(),
+                    ),
                     CypherValue::Null => CypherValue::Null,
                     _ => CypherValue::Null,
                 }
@@ -2304,7 +2307,7 @@ fn exists_node_candidates(
         match record.get(var) {
             Some(CypherValue::Node(n)) => {
                 return if exists_node_matches(n, np, record, params, storage)? {
-                    Ok(vec![n.clone()])
+                    Ok(vec![(**n).clone()])
                 } else {
                     Ok(vec![])
                 };
@@ -2318,7 +2321,7 @@ fn exists_node_candidates(
     let mut out = Vec::new();
     for n in nodes {
         if exists_node_matches(&n, np, record, params, storage)? {
-            out.push(n);
+            out.push((*n).clone());
         }
     }
     Ok(out)
@@ -2494,7 +2497,10 @@ fn eval_pattern_comprehension(
     for start_node in candidates {
         let mut start_scope = record.clone();
         if let Some(var) = &start_np.variable {
-            start_scope.insert(var.clone(), CypherValue::Node(start_node.clone()));
+            start_scope.insert(
+                var.clone(),
+                CypherValue::Node(std::sync::Arc::new(start_node.clone())),
+            );
         }
         pc_walk_chain(
             &start_node,
@@ -2624,7 +2630,7 @@ fn pc_node_candidates(
         match record.get(var) {
             Some(CypherValue::Node(n)) => {
                 return if exists_node_matches(n, np, record, params, storage)? {
-                    Ok(vec![n.clone()])
+                    Ok(vec![(**n).clone()])
                 } else {
                     Ok(vec![])
                 };
@@ -2638,7 +2644,7 @@ fn pc_node_candidates(
     let mut out = Vec::new();
     for n in nodes {
         if exists_node_matches(&n, np, record, params, storage)? {
-            out.push(n);
+            out.push((*n).clone());
         }
     }
     Ok(out)

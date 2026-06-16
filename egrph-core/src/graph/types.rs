@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type NodeId = u64;
 pub type EdgeId = u64;
@@ -44,7 +45,10 @@ pub enum CypherValue {
     String(String),
     List(Vec<CypherValue>),
     Map(HashMap<String, CypherValue>),
-    Node(Node),
+    /// Nodes are reference-counted so the executor can thread a scanned node
+    /// through records, filters and expands without deep-cloning its property
+    /// map on every step.
+    Node(Arc<Node>),
     Relationship(Edge),
     Path(Path),
     Date(NaiveDate),

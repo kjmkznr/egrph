@@ -1,5 +1,6 @@
 use super::types::{Edge, EdgeId, Node, NodeId, PropertyValue};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Trait abstracting the graph storage layer.
 ///
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 pub trait StorageBackend {
     // ── Read ──────────────────────────────────────────────────────────────
 
-    fn get_node(&self, id: NodeId) -> Option<Node>;
+    fn get_node(&self, id: NodeId) -> Option<Arc<Node>>;
     fn get_edge(&self, id: EdgeId) -> Option<Edge>;
 
     fn node_count(&self) -> usize;
@@ -38,7 +39,7 @@ pub trait StorageBackend {
     fn incoming_edge_ids(&self, node_id: NodeId) -> Vec<EdgeId>;
 
     /// Return all nodes optionally filtered by label.
-    fn match_nodes(&self, label: Option<&str>) -> Vec<Node>;
+    fn match_nodes(&self, label: Option<&str>) -> Vec<Arc<Node>>;
 
     /// Return all nodes matching `label` (if given) and ALL of `props`.
     /// Implementations should override this to use a property index for O(1)
@@ -47,7 +48,7 @@ pub trait StorageBackend {
         &self,
         label: Option<&str>,
         props: &HashMap<String, PropertyValue>,
-    ) -> Vec<Node> {
+    ) -> Vec<Arc<Node>> {
         self.match_nodes(label)
             .into_iter()
             .filter(|node| {

@@ -25,6 +25,7 @@ use super::types::{Edge, EdgeId, Node, NodeId, PropertyValue};
 use sled::Db;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Persistent graph storage backed by sled.
 pub struct SledStorage {
@@ -278,8 +279,12 @@ impl StorageBackend for SledStorage {
         Ok(id)
     }
 
-    fn get_node(&self, id: NodeId) -> Option<Node> {
-        self.nodes.get(u64_key(id)).ok()?.and_then(|v| decode(&v))
+    fn get_node(&self, id: NodeId) -> Option<Arc<Node>> {
+        self.nodes
+            .get(u64_key(id))
+            .ok()?
+            .and_then(|v| decode(&v))
+            .map(Arc::new)
     }
 
     fn get_edge(&self, id: EdgeId) -> Option<Edge> {
@@ -316,13 +321,13 @@ impl StorageBackend for SledStorage {
         self.load_adj(&self.incoming, node_id)
     }
 
-    fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
+    fn match_nodes(&self, label: Option<&str>) -> Vec<Arc<Node>> {
         match label {
             None => self
                 .nodes
                 .iter()
                 .filter_map(|r| r.ok())
-                .filter_map(|(_, v)| decode(&v))
+                .filter_map(|(_, v)| decode(&v).map(Arc::new))
                 .collect(),
             Some(l) => {
                 let prefix = label_prefix(l);
@@ -360,7 +365,7 @@ impl StorageBackend for SledStorage {
         // label set, mirroring `match_nodes_with_props`. This makes MERGE-by-key
         // O(1) rather than O(label-set). Fall back to the label scan (or all
         // nodes) when there are no properties to seed from.
-        let candidates: Vec<Node> = if !properties.is_empty() {
+        let candidates: Vec<Arc<Node>> = if !properties.is_empty() {
             let mut candidate_ids: Option<std::collections::HashSet<NodeId>> = None;
             for (key, val) in properties {
                 let prefix = prop_idx_prefix(key, val);
@@ -403,7 +408,7 @@ impl StorageBackend for SledStorage {
             self.nodes
                 .iter()
                 .filter_map(|r| r.ok())
-                .filter_map(|(_, v)| decode(&v))
+                .filter_map(|(_, v)| decode(&v).map(Arc::new))
                 .collect()
         };
 
@@ -448,7 +453,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
-        if let Some(mut node) = self.get_node(id) {
+        if let Some(node) = self.get_node(id) {
+            let mut node = (*node).clone();
             if let Some(old_val) = node.properties.get(&key) {
                 self.prop_idx.remove(prop_idx_key(&key, old_val, id)).ok();
             }
@@ -468,7 +474,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(mut node) = self.get_node(id) {
+        if let Some(node) = self.get_node(id) {
+            let mut node = (*node).clone();
             for (key, val) in &node.properties {
                 self.prop_idx.remove(prop_idx_key(key, val, id)).ok();
             }
@@ -488,7 +495,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn merge_node_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(mut node) = self.get_node(id) {
+        if let Some(node) = self.get_node(id) {
+            let mut node = (*node).clone();
             for (k, v) in properties {
                 if let Some(old_val) = node.properties.get(&k) {
                     self.prop_idx.remove(prop_idx_key(&k, old_val, id)).ok();
@@ -510,7 +518,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn add_node_labels(&mut self, id: NodeId, labels: &[String]) {
-        if let Some(mut node) = self.get_node(id) {
+        if let Some(node) = self.get_node(id) {
+            let mut node = (*node).clone();
             for label in labels {
                 if !node.labels.contains(label) {
                     node.labels.push(label.clone());
@@ -524,7 +533,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn remove_node_property(&mut self, id: NodeId, key: &str) {
-        if let Some(mut node) = self.get_node(id) {
+        if let Some(node) = self.get_node(id) {
+            let mut node = (*node).clone();
             if let Some(val) = node.properties.remove(key) {
                 self.prop_idx.remove(prop_idx_key(key, &val, id)).ok();
             }
@@ -533,7 +543,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn remove_node_labels(&mut self, id: NodeId, labels: &[String]) {
-        if let Some(mut node) = self.get_node(id) {
+        if let Some(node) = self.get_node(id) {
+            let mut node = (*node).clone();
             for label in labels {
                 node.labels.retain(|l| l != label);
                 self.label_idx.remove(label_key(label, id)).ok();
@@ -616,7 +627,7 @@ impl StorageBackend for SledStorage {
         &self,
         label: Option<&str>,
         props: &HashMap<String, PropertyValue>,
-    ) -> Vec<Node> {
+    ) -> Vec<Arc<Node>> {
         if props.is_empty() {
             return self.match_nodes(label);
         }

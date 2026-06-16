@@ -189,7 +189,7 @@ fn execute_to_records<S: StorageBackend>(
                 // Resolve all matched (edge, dst_node) pairs first so we know the
                 // final emission — that one can consume `rec` by move rather than
                 // clone, saving one Arc::make_mut deep-copy per input row.
-                let mut matched: Vec<(Edge, Node)> = Vec::new();
+                let mut matched: Vec<(Edge, std::sync::Arc<Node>)> = Vec::new();
                 for edge in edges {
                     if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
                         continue;
@@ -2150,7 +2150,8 @@ fn execute_build_path<S: StorageBackend>(
     let mut result_records = Vec::with_capacity(input_records.len());
     for mut rec in input_records {
         let start_node = match rec.get(start_variable) {
-            Some(CypherValue::Node(n)) => n.clone(),
+            // Path holds owned Nodes; deref the ref-counted binding.
+            Some(CypherValue::Node(n)) => (**n).clone(),
             _ => {
                 // Start variable failed to bind (e.g. OPTIONAL MATCH miss);
                 // propagate NULL for the path so the row still survives.
@@ -2187,7 +2188,7 @@ fn execute_build_path<S: StorageBackend>(
                         break;
                     };
                     relationships.push(edge);
-                    nodes.push(next_node);
+                    nodes.push((*next_node).clone());
                 }
                 (true, CypherValue::List(edges)) => {
                     for ev in edges {
@@ -2207,7 +2208,7 @@ fn execute_build_path<S: StorageBackend>(
                             break;
                         };
                         relationships.push(edge);
-                        nodes.push(next_node);
+                        nodes.push((*next_node).clone());
                     }
                     if aborted {
                         break;
@@ -2386,7 +2387,7 @@ fn execute_shortest_path<S: StorageBackend>(
                 && let Some(node) = storage.get_node(start_id)
             {
                 let path_val = CypherValue::Path(Path {
-                    nodes: vec![node],
+                    nodes: vec![(*node).clone()],
                     relationships: vec![],
                 });
                 let mut new_rec = rec.clone();
@@ -2513,7 +2514,7 @@ fn execute_shortest_path<S: StorageBackend>(
                 if let (Some(edge), Some(node)) = (storage.get_edge(eid), storage.get_node(node_id))
                 {
                     edges_rev.push(edge);
-                    nodes_rev.push(node);
+                    nodes_rev.push((*node).clone());
                 }
                 cur = parent;
             }
@@ -2522,7 +2523,7 @@ fn execute_shortest_path<S: StorageBackend>(
 
             let mut all_nodes: Vec<Node> = Vec::with_capacity(nodes_rev.len() + 1);
             if let Some(start_node) = storage.get_node(start_id) {
-                all_nodes.push(start_node);
+                all_nodes.push((*start_node).clone());
             }
             all_nodes.extend(nodes_rev);
 

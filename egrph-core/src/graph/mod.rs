@@ -113,7 +113,8 @@ impl<S: StorageBackend> Graph<S> {
     }
 
     pub fn get_node(&self, id: NodeId) -> Option<Node> {
-        self.storage.get_node(id)
+        // Public API yields owned Node; deref the ref-counted storage value.
+        self.storage.get_node(id).map(|n| (*n).clone())
     }
 
     pub fn get_edge(&self, id: EdgeId) -> Option<Edge> {
@@ -121,7 +122,11 @@ impl<S: StorageBackend> Graph<S> {
     }
 
     pub fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {
-        self.storage.match_nodes(label)
+        self.storage
+            .match_nodes(label)
+            .into_iter()
+            .map(|n| (*n).clone())
+            .collect()
     }
 
     pub fn node_count(&self) -> usize {
