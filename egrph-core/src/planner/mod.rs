@@ -155,8 +155,8 @@ fn plan_match_scan(
                 };
             }
 
-            // Add property filters if inline properties are specified
-            current = add_property_filters(current, &variable, &node_pattern.properties);
+            // Inline properties are enforced exactly by ScanNodes (via the
+            // property index), so no redundant Filter is needed here.
 
             Ok(current)
         }
@@ -197,8 +197,8 @@ fn plan_match_scan(
                 };
             }
 
-            // Add property filters for the start node
-            current = add_property_filters(current, &start_var, &start.properties);
+            // Start-node inline properties are enforced exactly by ScanNodes;
+            // no redundant Filter needed (Expand targets below still get one).
 
             let mut segments: Vec<crate::planner::plan::PathSegment> =
                 Vec::with_capacity(elements.len());

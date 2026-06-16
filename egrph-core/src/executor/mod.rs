@@ -104,36 +104,40 @@ fn execute_to_records<S: StorageBackend>(
                 storage.match_nodes(label_filter.as_deref())
             } else {
                 // Evaluate inline property expressions against an empty record.
-                // Inline node-pattern properties are always literals, so this
-                // succeeds immediately without graph access.
+                // Inline node-pattern properties are constants/params, so this
+                // resolves without graph access. The scan is exact (it fully
+                // enforces the inline props), so the planner does not emit a
+                // redundant Filter for them.
                 let empty_rec = Record::new();
                 let mut props_map: HashMap<String, PropertyValue> =
                     HashMap::with_capacity(inline_props.len());
-                let mut use_index = true;
+                let mut all_scalar = true;
                 for (key, expr) in inline_props {
-                    match eval_with_params(expr, &empty_rec, params, storage) {
-                        Ok(CypherValue::String(s)) => {
+                    match eval_with_params(expr, &empty_rec, params, storage)? {
+                        CypherValue::String(s) => {
                             props_map.insert(key.clone(), PropertyValue::String(s));
                         }
-                        Ok(CypherValue::Integer(i)) => {
+                        CypherValue::Integer(i) => {
                             props_map.insert(key.clone(), PropertyValue::Int(i));
                         }
-                        Ok(CypherValue::Float(f)) => {
+                        CypherValue::Float(f) => {
                             props_map.insert(key.clone(), PropertyValue::Float(f));
                         }
-                        Ok(CypherValue::Boolean(b)) => {
+                        CypherValue::Boolean(b) => {
                             props_map.insert(key.clone(), PropertyValue::Bool(b));
                         }
+                        // A non-scalar value (Null/List/Map/...) can never equal a
+                        // node property (always scalar), so nothing matches.
                         _ => {
-                            use_index = false;
+                            all_scalar = false;
                             break;
                         }
                     }
                 }
-                if use_index {
+                if all_scalar {
                     storage.match_nodes_with_props(label_filter.as_deref(), &props_map)
                 } else {
-                    storage.match_nodes(label_filter.as_deref())
+                    Vec::new()
                 }
             };
             let records: Vec<Record> = nodes
