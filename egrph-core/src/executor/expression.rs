@@ -2264,6 +2264,42 @@ pub fn is_truthy(value: &CypherValue) -> bool {
 
 // ─── EXISTS subquery evaluation ──────────────────────────────────────────────
 
+/// Seed the candidate node set for an EXISTS / pattern-comprehension start node
+/// from the property index when inline props allow it; otherwise full label scan.
+/// The caller MUST still apply `exists_node_matches` as the exact re-filter —
+/// this only narrows, never decides.
+fn seed_candidates(
+    np: &NodePattern,
+    record: &Record,
+    params: &Parameters,
+    storage: &dyn StorageBackend,
+) -> Result<Vec<Arc<Node>>, CypherError> {
+    let label = np.labels.first().map(|s| s.as_str());
+    let Some(map) = &np.properties else {
+        return Ok(storage.match_nodes(label));
+    };
+    let mut props_map: HashMap<String, PropertyValue> = HashMap::new();
+    for (k, expr) in &map.entries {
+        let MapKey::Identifier(k_str) = k else {
+            continue; // dynamic keys ignored, as today
+        };
+        match eval_with_params(expr, record, params, storage)? {
+            CypherValue::String(s) => {
+                props_map.insert(k_str.clone(), PropertyValue::String(s));
+            }
+            CypherValue::Boolean(b) => {
+                props_map.insert(k_str.clone(), PropertyValue::Bool(b));
+            }
+            // Int/Float intentionally NOT seeded (index keys are type-exact but
+            // value comparison treats Int(1)==Float(1.0)); re-filter enforces them.
+            CypherValue::Integer(_) | CypherValue::Float(_) => {}
+            // Non-scalar/Null can never equal a scalar node property → provably empty.
+            _ => return Ok(Vec::new()),
+        }
+    }
+    Ok(storage.match_nodes_with_props(label, &props_map))
+}
+
 fn eval_exists(
     pattern: &PatternElement,
     record: &Record,
@@ -2288,11 +2324,101 @@ fn eval_exists(
         }
     }
 
+    // Fast path: single-hop pattern where the terminal node is already bound in
+    // the outer record but the start node is not bound.  Walk in REVERSE from the
+    // bound terminal to avoid a full start-node scan.
+    if chain.len() == 1 {
+        let terminal_np = &chain[0].node;
+        if let Some(term_var) = &terminal_np.variable
+            && let Some(CypherValue::Node(bound)) = record.get(term_var)
+        {
+            let start_is_bound = start_np
+                .variable
+                .as_ref()
+                .map(|v| record.contains_key(v.as_str()))
+                .unwrap_or(false);
+            if !start_is_bound {
+                return exists_reverse_single_hop(
+                    start_np, &chain[0], bound, record, params, storage,
+                );
+            }
+        }
+    }
+
     let candidates = exists_node_candidates(start_np, record, params, storage)?;
     for start_node in candidates {
         if exists_walk_chain(&start_node, chain, 0, record, params, storage)? {
             return Ok(true);
         }
+    }
+    Ok(false)
+}
+
+/// Reverse-walk a single-hop EXISTS from an already-bound terminal node.
+/// Returns `Ok(true)` if any matching start→terminal path exists.
+fn exists_reverse_single_hop(
+    start_np: &NodePattern,
+    step: &PatternChainElement,
+    bound: &Arc<Node>,
+    record: &Record,
+    params: &Parameters,
+    storage: &dyn StorageBackend,
+) -> Result<bool, CypherError> {
+    // First: validate the bound terminal itself against the terminal pattern.
+    // The forward walk does this; we must too.
+    if !exists_node_matches(bound, &step.node, record, params, storage)? {
+        return Ok(false);
+    }
+
+    // Enumerate edges arriving at `bound` from the perspective of the declared
+    // relationship direction.  Outgoing (start→bound) ⟹ incoming edges of bound.
+    let edges = match step.relationship.direction {
+        Direction::Outgoing => storage.incoming_edges(bound.id),
+        Direction::Incoming => storage.outgoing_edges(bound.id),
+        Direction::Undirected => {
+            let mut v = storage.incoming_edges(bound.id);
+            v.extend(storage.outgoing_edges(bound.id));
+            v
+        }
+    };
+
+    for edge in &edges {
+        // Rel-type filter.
+        if !step.relationship.rel_types.is_empty()
+            && !step.relationship.rel_types.iter().any(|t| t == &edge.label)
+        {
+            continue;
+        }
+        // Rel-property filter.
+        if !exists_rel_properties_match(
+            edge,
+            &step.relationship.properties,
+            record,
+            params,
+            storage,
+        )? {
+            continue;
+        }
+        // Compute the far endpoint (candidate start node).
+        let far_id = match step.relationship.direction {
+            Direction::Outgoing => edge.src,
+            Direction::Incoming => edge.dst,
+            Direction::Undirected => {
+                if edge.dst == bound.id {
+                    edge.src
+                } else {
+                    edge.dst
+                }
+            }
+        };
+        let Some(far_node) = storage.get_node(far_id) else {
+            continue;
+        };
+        // Validate the candidate start node against the start pattern.
+        if !exists_node_matches(&far_node, start_np, record, params, storage)? {
+            continue;
+        }
+        return Ok(true);
     }
     Ok(false)
 }
@@ -2316,10 +2442,8 @@ fn exists_node_candidates(
             None => {}
         }
     }
-    let label_filter = np.labels.first().map(|s| s.as_str());
-    let nodes = storage.match_nodes(label_filter);
     let mut out = Vec::new();
-    for n in nodes {
+    for n in seed_candidates(np, record, params, storage)? {
         if exists_node_matches(&n, np, record, params, storage)? {
             out.push((*n).clone());
         }
@@ -2491,8 +2615,39 @@ fn eval_pattern_comprehension(
         }
     }
 
-    let candidates = pc_node_candidates(start_np, record, params, storage)?;
     let mut results = Vec::new();
+
+    // Fast path: single-hop pattern where the terminal node is already bound in
+    // the outer record but the start node is not bound.  Walk in REVERSE from the
+    // bound terminal to avoid a full start-node scan.
+    if chain.len() == 1 {
+        let terminal_np = &chain[0].node;
+        if let Some(term_var) = &terminal_np.variable
+            && let Some(CypherValue::Node(bound)) = record.get(term_var)
+        {
+            let start_is_bound = start_np
+                .variable
+                .as_ref()
+                .map(|v| record.contains_key(v.as_str()))
+                .unwrap_or(false);
+            if !start_is_bound {
+                pc_reverse_single_hop(
+                    start_np,
+                    &chain[0],
+                    bound,
+                    predicate,
+                    projection,
+                    record,
+                    params,
+                    storage,
+                    &mut results,
+                )?;
+                return Ok(CypherValue::List(results));
+            }
+        }
+    }
+
+    let candidates = pc_node_candidates(start_np, record, params, storage)?;
 
     for start_node in candidates {
         let mut start_scope = record.clone();
@@ -2620,6 +2775,104 @@ fn pc_walk_chain(
     Ok(())
 }
 
+/// Reverse-walk a single-hop pattern comprehension from an already-bound terminal.
+/// Mirrors the exact filter sequence of `pc_walk_chain` for the single terminal
+/// step, inverted.  Results are pushed into `results` in the same logical order
+/// that forward evaluation would produce for each matching edge.
+#[allow(clippy::too_many_arguments)]
+fn pc_reverse_single_hop(
+    start_np: &NodePattern,
+    step: &PatternChainElement,
+    bound: &Arc<Node>,
+    predicate: Option<&Expression>,
+    projection: &Expression,
+    record: &Record,
+    params: &Parameters,
+    storage: &dyn StorageBackend,
+    results: &mut Vec<CypherValue>,
+) -> Result<(), CypherError> {
+    // First: validate the bound terminal itself against the terminal pattern,
+    // exactly as the forward terminal step does via `exists_node_matches`.
+    if !exists_node_matches(bound, &step.node, record, params, storage)? {
+        return Ok(());
+    }
+
+    // Enumerate edges arriving at `bound` from the perspective of the declared
+    // relationship direction.  Outgoing (start→bound) ⟹ incoming edges of bound.
+    let edges = match step.relationship.direction {
+        Direction::Outgoing => storage.incoming_edges(bound.id),
+        Direction::Incoming => storage.outgoing_edges(bound.id),
+        Direction::Undirected => {
+            let mut v = storage.incoming_edges(bound.id);
+            v.extend(storage.outgoing_edges(bound.id));
+            v
+        }
+    };
+
+    for edge in &edges {
+        // Rel-type filter.
+        if !step.relationship.rel_types.is_empty()
+            && !step.relationship.rel_types.iter().any(|t| t == &edge.label)
+        {
+            continue;
+        }
+        // Compute the far endpoint (candidate start node) first so we can build
+        // a partial scope for rel-property evaluation (which may reference vars).
+        let far_id = match step.relationship.direction {
+            Direction::Outgoing => edge.src,
+            Direction::Incoming => edge.dst,
+            Direction::Undirected => {
+                if edge.dst == bound.id {
+                    edge.src
+                } else {
+                    edge.dst
+                }
+            }
+        };
+        let Some(far_node) = storage.get_node(far_id) else {
+            continue;
+        };
+        // Validate the candidate start node against the start pattern.
+        // Use outer record (no start var bound yet), matching forward pc_node_candidates.
+        if !exists_node_matches(&far_node, start_np, record, params, storage)? {
+            continue;
+        }
+        // Build a scope that includes the start variable (if named), then check
+        // rel-props and the terminal variable binding against that scope — this
+        // mirrors the scope that pc_walk_chain would have at the terminal step.
+        let mut scope = record.clone();
+        if let Some(var) = &start_np.variable {
+            scope.insert(var.clone(), CypherValue::Node(far_node.clone()));
+        }
+        // Rel-property filter against the scope (which now contains start var).
+        if !exists_rel_properties_match(
+            edge,
+            &step.relationship.properties,
+            &scope,
+            params,
+            storage,
+        )? {
+            continue;
+        }
+        // Bind rel variable and terminal variable into the scope.
+        if let Some(var) = &step.relationship.variable {
+            scope.insert(var.clone(), CypherValue::Relationship(edge.clone()));
+        }
+        if let Some(var) = &step.node.variable {
+            scope.insert(var.clone(), CypherValue::Node(bound.clone()));
+        }
+        // Evaluate predicate and projection.
+        if let Some(pred) = predicate {
+            let pred_val = eval_with_params(pred, &scope, params, storage)?;
+            if !is_truthy(&pred_val) {
+                continue;
+            }
+        }
+        results.push(eval_with_params(projection, &scope, params, storage)?);
+    }
+    Ok(())
+}
+
 fn pc_node_candidates(
     np: &NodePattern,
     record: &Record,
@@ -2639,10 +2892,8 @@ fn pc_node_candidates(
             None => {}
         }
     }
-    let label_filter = np.labels.first().map(|s| s.as_str());
-    let nodes = storage.match_nodes(label_filter);
     let mut out = Vec::new();
-    for n in nodes {
+    for n in seed_candidates(np, record, params, storage)? {
         if exists_node_matches(&n, np, record, params, storage)? {
             out.push((*n).clone());
         }
