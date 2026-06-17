@@ -12,20 +12,20 @@ pub trait StorageBackend {
     // ── Read ──────────────────────────────────────────────────────────────
 
     fn get_node(&self, id: NodeId) -> Option<Arc<Node>>;
-    fn get_edge(&self, id: EdgeId) -> Option<Edge>;
+    fn get_edge(&self, id: EdgeId) -> Option<Arc<Edge>>;
 
     fn node_count(&self) -> usize;
     fn edge_count(&self) -> usize;
 
-    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Edge>;
-    fn incoming_edges(&self, node_id: NodeId) -> Vec<Edge>;
+    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Arc<Edge>>;
+    fn incoming_edges(&self, node_id: NodeId) -> Vec<Arc<Edge>>;
 
     /// Return edges from `src` to `dst` with relationship type `rel_type`.
     /// Used to match a relationship between two already-bound nodes (e.g. the
     /// edge MERGE in `(a)-[:R]->(b)`) without scanning `src`'s whole adjacency.
     /// Implementations should override with an endpoint index for O(1) lookup;
     /// the default falls back to scanning `outgoing_edges`.
-    fn edges_between(&self, src: NodeId, rel_type: &str, dst: NodeId) -> Vec<Edge> {
+    fn edges_between(&self, src: NodeId, rel_type: &str, dst: NodeId) -> Vec<Arc<Edge>> {
         self.outgoing_edges(src)
             .into_iter()
             .filter(|e| e.label == rel_type && e.dst == dst)

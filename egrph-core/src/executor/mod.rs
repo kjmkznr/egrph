@@ -193,7 +193,7 @@ fn execute_to_records<S: StorageBackend>(
                 // Resolve all matched (edge, dst_node) pairs first so we know the
                 // final emission — that one can consume `rec` by move rather than
                 // clone, saving one Arc::make_mut deep-copy per input row.
-                let mut matched: Vec<(Edge, std::sync::Arc<Node>)> = Vec::new();
+                let mut matched: Vec<(std::sync::Arc<Edge>, std::sync::Arc<Node>)> = Vec::new();
                 for edge in edges {
                     if !rel_types.is_empty() && !rel_types.iter().any(|rt| rt == &edge.label) {
                         continue;
@@ -2180,7 +2180,6 @@ fn execute_build_path<S: StorageBackend>(
             };
             match (seg.is_var_length, rel_val) {
                 (false, CypherValue::Relationship(edge)) => {
-                    let edge = edge.clone();
                     let cur_id = nodes.last().expect("path always has a current node").id;
                     let next_id = if edge.src == cur_id {
                         edge.dst
@@ -2191,7 +2190,8 @@ fn execute_build_path<S: StorageBackend>(
                         aborted = true;
                         break;
                     };
-                    relationships.push(edge);
+                    // Path holds owned Edges; deref through &Arc<Edge> to clone the Edge.
+                    relationships.push((**edge).clone());
                     nodes.push((*next_node).clone());
                 }
                 (true, CypherValue::List(edges)) => {
@@ -2200,7 +2200,6 @@ fn execute_build_path<S: StorageBackend>(
                             aborted = true;
                             break;
                         };
-                        let edge = edge.clone();
                         let cur_id = nodes.last().expect("path always has a current node").id;
                         let next_id = if edge.src == cur_id {
                             edge.dst
@@ -2211,7 +2210,8 @@ fn execute_build_path<S: StorageBackend>(
                             aborted = true;
                             break;
                         };
-                        relationships.push(edge);
+                        // `ev` is borrowed (&CypherValue); edge is &Arc<Edge>.
+                        relationships.push((**edge).clone());
                         nodes.push((*next_node).clone());
                     }
                     if aborted {
@@ -2517,7 +2517,7 @@ fn execute_shortest_path<S: StorageBackend>(
                 let (parent, eid, node_id) = path_arena[i as usize];
                 if let (Some(edge), Some(node)) = (storage.get_edge(eid), storage.get_node(node_id))
                 {
-                    edges_rev.push(edge);
+                    edges_rev.push((*edge).clone());
                     nodes_rev.push((*node).clone());
                 }
                 cur = parent;
@@ -2533,7 +2533,7 @@ fn execute_shortest_path<S: StorageBackend>(
 
             let rel_list: Vec<CypherValue> = edges_rev
                 .iter()
-                .map(|e| CypherValue::Relationship(e.clone()))
+                .map(|e| CypherValue::Relationship(std::sync::Arc::new(e.clone())))
                 .collect();
 
             let path_val = CypherValue::Path(Path {

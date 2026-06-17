@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct MemoryStorage {
     pub(crate) nodes: HashMap<NodeId, Arc<Node>>,
-    pub(crate) edges: HashMap<EdgeId, Edge>,
+    pub(crate) edges: HashMap<EdgeId, Arc<Edge>>,
     pub(crate) outgoing: HashMap<NodeId, Vec<EdgeId>>,
     pub(crate) incoming: HashMap<NodeId, Vec<EdgeId>>,
     /// Label index: label -> set of NodeIds that have this label.
@@ -115,7 +115,7 @@ impl StorageBackend for MemoryStorage {
             dst,
             properties,
         };
-        self.edges.insert(id, edge);
+        self.edges.insert(id, Arc::new(edge));
         self.outgoing.entry(src).or_default().push(id);
         self.incoming.entry(dst).or_default().push(id);
         self.next_edge_id += 1;
@@ -126,7 +126,7 @@ impl StorageBackend for MemoryStorage {
         self.nodes.get(&id).cloned()
     }
 
-    fn get_edge(&self, id: EdgeId) -> Option<Edge> {
+    fn get_edge(&self, id: EdgeId) -> Option<Arc<Edge>> {
         self.edges.get(&id).cloned()
     }
 
@@ -138,7 +138,7 @@ impl StorageBackend for MemoryStorage {
         self.edges.len()
     }
 
-    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Edge> {
+    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Arc<Edge>> {
         self.outgoing
             .get(&node_id)
             .map(|ids| {
@@ -149,7 +149,7 @@ impl StorageBackend for MemoryStorage {
             .unwrap_or_default()
     }
 
-    fn incoming_edges(&self, node_id: NodeId) -> Vec<Edge> {
+    fn incoming_edges(&self, node_id: NodeId) -> Vec<Arc<Edge>> {
         self.incoming
             .get(&node_id)
             .map(|ids| {
@@ -337,7 +337,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
-        if let Some(edge) = self.edges.get_mut(&id) {
+        if let Some(edge) = self.edges.get_mut(&id).map(Arc::make_mut) {
             edge.properties.insert(key, value);
         }
     }
@@ -367,7 +367,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn set_edge_all_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(edge) = self.edges.get_mut(&id) {
+        if let Some(edge) = self.edges.get_mut(&id).map(Arc::make_mut) {
             edge.properties = properties;
         }
     }
@@ -397,7 +397,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn merge_edge_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(edge) = self.edges.get_mut(&id) {
+        if let Some(edge) = self.edges.get_mut(&id).map(Arc::make_mut) {
             for (k, v) in properties {
                 edge.properties.insert(k, v);
             }
@@ -443,7 +443,7 @@ impl StorageBackend for MemoryStorage {
     }
 
     fn remove_edge_property(&mut self, id: EdgeId, key: &str) {
-        if let Some(edge) = self.edges.get_mut(&id) {
+        if let Some(edge) = self.edges.get_mut(&id).map(Arc::make_mut) {
             edge.properties.remove(key);
         }
     }
@@ -782,7 +782,7 @@ impl StorageBackend for MemoryStorage {
         }
     }
 
-    fn edges_between(&self, src: NodeId, rel_type: &str, dst: NodeId) -> Vec<Edge> {
+    fn edges_between(&self, src: NodeId, rel_type: &str, dst: NodeId) -> Vec<Arc<Edge>> {
         self.edge_adjacency
             .get(&(src, rel_type.to_string(), dst))
             .map(|ids| {

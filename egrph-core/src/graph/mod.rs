@@ -118,7 +118,8 @@ impl<S: StorageBackend> Graph<S> {
     }
 
     pub fn get_edge(&self, id: EdgeId) -> Option<Edge> {
-        self.storage.get_edge(id)
+        // Public API yields owned Edge; deref the ref-counted storage value.
+        self.storage.get_edge(id).map(|e| (*e).clone())
     }
 
     pub fn match_nodes(&self, label: Option<&str>) -> Vec<Node> {

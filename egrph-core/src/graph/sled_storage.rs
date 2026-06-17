@@ -287,8 +287,12 @@ impl StorageBackend for SledStorage {
             .map(Arc::new)
     }
 
-    fn get_edge(&self, id: EdgeId) -> Option<Edge> {
-        self.edges.get(u64_key(id)).ok()?.and_then(|v| decode(&v))
+    fn get_edge(&self, id: EdgeId) -> Option<Arc<Edge>> {
+        self.edges
+            .get(u64_key(id))
+            .ok()?
+            .and_then(|v| decode(&v))
+            .map(Arc::new)
     }
 
     fn node_count(&self) -> usize {
@@ -299,14 +303,14 @@ impl StorageBackend for SledStorage {
         self.edges.len()
     }
 
-    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Edge> {
+    fn outgoing_edges(&self, node_id: NodeId) -> Vec<Arc<Edge>> {
         self.outgoing_edge_ids(node_id)
             .into_iter()
             .filter_map(|id| self.get_edge(id))
             .collect()
     }
 
-    fn incoming_edges(&self, node_id: NodeId) -> Vec<Edge> {
+    fn incoming_edges(&self, node_id: NodeId) -> Vec<Arc<Edge>> {
         self.incoming_edge_ids(node_id)
             .into_iter()
             .filter_map(|id| self.get_edge(id))
@@ -467,7 +471,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
-        if let Some(mut edge) = self.get_edge(id) {
+        if let Some(edge) = self.get_edge(id) {
+            let mut edge = (*edge).clone();
             edge.properties.insert(key, value);
             self.edges.insert(u64_key(id), encode(&edge)).ok();
         }
@@ -488,7 +493,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn set_edge_all_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(mut edge) = self.get_edge(id) {
+        if let Some(edge) = self.get_edge(id) {
+            let mut edge = (*edge).clone();
             edge.properties = properties;
             self.edges.insert(u64_key(id), encode(&edge)).ok();
         }
@@ -509,7 +515,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn merge_edge_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>) {
-        if let Some(mut edge) = self.get_edge(id) {
+        if let Some(edge) = self.get_edge(id) {
+            let mut edge = (*edge).clone();
             for (k, v) in properties {
                 edge.properties.insert(k, v);
             }
@@ -554,7 +561,8 @@ impl StorageBackend for SledStorage {
     }
 
     fn remove_edge_property(&mut self, id: EdgeId, key: &str) {
-        if let Some(mut edge) = self.get_edge(id) {
+        if let Some(edge) = self.get_edge(id) {
+            let mut edge = (*edge).clone();
             edge.properties.remove(key);
             self.edges.insert(u64_key(id), encode(&edge)).ok();
         }

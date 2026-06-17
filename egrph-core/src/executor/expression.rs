@@ -1775,7 +1775,7 @@ fn eval_function(
                     CypherValue::Path(p) => CypherValue::List(
                         p.relationships
                             .into_iter()
-                            .map(CypherValue::Relationship)
+                            .map(|e| CypherValue::Relationship(std::sync::Arc::new(e)))
                             .collect(),
                     ),
                     CypherValue::Null => CypherValue::Null,

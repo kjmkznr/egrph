@@ -49,7 +49,10 @@ pub enum CypherValue {
     /// through records, filters and expands without deep-cloning its property
     /// map on every step.
     Node(Arc<Node>),
-    Relationship(Edge),
+    /// Edges are reference-counted for the same reason as nodes: the executor
+    /// threads them through records, filters and expands without deep-cloning
+    /// the property map on every step.
+    Relationship(Arc<Edge>),
     Path(Path),
     Date(NaiveDate),
     Timestamp(DateTime<Utc>),
