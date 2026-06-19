@@ -21,20 +21,33 @@ pub struct MemoryStorage {
     node_key_constraints: HashMap<String, Vec<Vec<String>>>,
     /// PROPERTY TYPE constraints: label -> property name -> type name ("BOOLEAN"|"STRING"|"INTEGER"|"FLOAT").
     property_type_constraints: HashMap<String, HashMap<String, String>>,
-    /// Property index: prop_name -> prop_value_key -> set of NodeIds.
+    /// Property index: prop_name -> prop_key -> set of NodeIds.
     /// Enables O(1) property lookup instead of O(N) full scan.
-    property_index: HashMap<String, HashMap<String, HashSet<NodeId>>>,
+    property_index: HashMap<String, HashMap<PropKey, HashSet<NodeId>>>,
     /// Edge adjacency index: (src, label, dst) -> edge ids. Enables O(1)
     /// relationship lookup by endpoints+type (e.g. MERGE of an edge between two
     /// already-bound nodes) instead of scanning the source's whole adjacency.
     edge_adjacency: HashMap<(NodeId, String, NodeId), Vec<EdgeId>>,
 }
 
-/// Stable string key for a `PropertyValue`, used as the inner key of the
-/// property index.  `{:?}` includes the variant name so there is no collision
+/// Zero-copy key for a `PropertyValue`, used as the inner key of the
+/// property index.  Each variant is distinct so there is no collision
 /// between e.g. `Int(1)` and `String("1")`.
-fn prop_value_key(val: &PropertyValue) -> String {
-    format!("{:?}", val)
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum PropKey {
+    Str(String),
+    Int(i64),
+    FloatBits(u64), // f64::to_bits() for Hash+Eq
+    Bool(bool),
+}
+
+fn prop_key(val: &PropertyValue) -> PropKey {
+    match val {
+        PropertyValue::String(s) => PropKey::Str(s.clone()),
+        PropertyValue::Int(i) => PropKey::Int(*i),
+        PropertyValue::Float(f) => PropKey::FloatBits(f.to_bits()),
+        PropertyValue::Bool(b) => PropKey::Bool(*b),
+    }
 }
 
 /// Backward-compatible alias used within this crate.
@@ -69,7 +82,7 @@ impl StorageBackend for MemoryStorage {
             self.property_index
                 .entry(key.clone())
                 .or_default()
-                .entry(prop_value_key(val))
+                .entry(prop_key(val))
                 .or_default()
                 .insert(id);
         }
@@ -196,7 +209,7 @@ impl StorageBackend for MemoryStorage {
         // results.  This is typically a single-element set for unique properties.
         let mut candidates: Option<HashSet<NodeId>> = None;
         for (key, val) in props {
-            let vkey = prop_value_key(val);
+            let vkey = prop_key(val);
             let ids: HashSet<NodeId> = self
                 .property_index
                 .get(key)
@@ -258,7 +271,7 @@ impl StorageBackend for MemoryStorage {
             }
         }
         for (key, val) in properties {
-            let vkey = prop_value_key(val);
+            let vkey = prop_key(val);
             match self
                 .property_index
                 .get(key)
@@ -318,7 +331,7 @@ impl StorageBackend for MemoryStorage {
         if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             // Remove old index entry.
             if let Some(old_val) = node.properties.get(&key) {
-                let old_vkey = prop_value_key(old_val);
+                let old_vkey = prop_key(old_val);
                 if let Some(val_map) = self.property_index.get_mut(&key)
                     && let Some(id_set) = val_map.get_mut(&old_vkey)
                 {
@@ -330,7 +343,7 @@ impl StorageBackend for MemoryStorage {
             self.property_index
                 .entry(key)
                 .or_default()
-                .entry(prop_value_key(&value))
+                .entry(prop_key(&value))
                 .or_default()
                 .insert(id);
         }
@@ -346,7 +359,7 @@ impl StorageBackend for MemoryStorage {
         if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             // Remove old index entries.
             for (key, val) in &node.properties {
-                let old_vkey = prop_value_key(val);
+                let old_vkey = prop_key(val);
                 if let Some(val_map) = self.property_index.get_mut(key)
                     && let Some(id_set) = val_map.get_mut(&old_vkey)
                 {
@@ -358,7 +371,7 @@ impl StorageBackend for MemoryStorage {
                 self.property_index
                     .entry(key.clone())
                     .or_default()
-                    .entry(prop_value_key(val))
+                    .entry(prop_key(val))
                     .or_default()
                     .insert(id);
             }
@@ -377,7 +390,7 @@ impl StorageBackend for MemoryStorage {
             for (k, v) in properties {
                 // Remove old index entry for this key if it exists.
                 if let Some(old_val) = node.properties.get(&k) {
-                    let old_vkey = prop_value_key(old_val);
+                    let old_vkey = prop_key(old_val);
                     if let Some(val_map) = self.property_index.get_mut(&k)
                         && let Some(id_set) = val_map.get_mut(&old_vkey)
                     {
@@ -388,7 +401,7 @@ impl StorageBackend for MemoryStorage {
                 self.property_index
                     .entry(k.clone())
                     .or_default()
-                    .entry(prop_value_key(&v))
+                    .entry(prop_key(&v))
                     .or_default()
                     .insert(id);
                 node.properties.insert(k, v);
@@ -422,7 +435,7 @@ impl StorageBackend for MemoryStorage {
         if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut)
             && let Some(val) = node.properties.remove(key)
         {
-            let vkey = prop_value_key(&val);
+            let vkey = prop_key(&val);
             if let Some(val_map) = self.property_index.get_mut(key)
                 && let Some(id_set) = val_map.get_mut(&vkey)
             {
@@ -507,7 +520,7 @@ impl StorageBackend for MemoryStorage {
                 }
             }
             for (key, val) in &node.properties {
-                let vkey = prop_value_key(val);
+                let vkey = prop_key(val);
                 if let Some(val_map) = self.property_index.get_mut(key)
                     && let Some(id_set) = val_map.get_mut(&vkey)
                 {
@@ -557,7 +570,7 @@ impl StorageBackend for MemoryStorage {
         {
             // Probe the property index for this exact value instead of scanning
             // the whole label set, then confirm the label and value precisely.
-            let vkey = prop_value_key(value);
+            let vkey = prop_key(value);
             if let Some(node_ids) = self
                 .property_index
                 .get(property)
