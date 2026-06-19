@@ -1541,14 +1541,23 @@ fn execute_merge<S: StorageBackend>(
                     result_records.push(rec);
                 } else {
                     // Found — produce one output row per matched node and apply ON MATCH SET
-                    for node_id in existing_ids {
+                    let n = existing_ids.len();
+                    let mut pending = Some(base_rec);
+                    for (i, node_id) in existing_ids.into_iter().enumerate() {
+                        let is_last = i + 1 == n;
                         let node = storage
                             .get_node(node_id)
                             .ok_or_else(|| {
                                 CypherError::RuntimeError("Merged node not found".to_string())
-                            })?
-                            .clone();
-                        let mut rec = base_rec.clone();
+                            })?;
+                        let mut rec = if is_last {
+                            pending.take().expect("pending present on last iteration")
+                        } else {
+                            pending
+                                .as_ref()
+                                .expect("pending present mid-iteration")
+                                .clone()
+                        };
                         rec.insert(variable.clone(), CypherValue::Node(node));
                         if let Some(items) = on_match {
                             for item in items {
