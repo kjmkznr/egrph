@@ -79,12 +79,11 @@ impl StorageBackend for MemoryStorage {
         // Unique constraint check is done via check_unique_constraint before calling this.
         let id = self.next_node_id;
         for (key, val) in &properties {
-            self.property_index
-                .entry(key.clone())
-                .or_default()
-                .entry(prop_key(val))
-                .or_default()
-                .insert(id);
+            let val_map = match self.property_index.get_mut(key.as_str()) {
+                Some(m) => m,
+                None => self.property_index.entry(key.clone()).or_default(),
+            };
+            val_map.entry(prop_key(val)).or_default().insert(id);
         }
         let node = Node {
             id,
@@ -285,34 +284,29 @@ impl StorageBackend for MemoryStorage {
                 None => return Vec::new(),
             }
         }
-        let candidates: Vec<NodeId> = match best {
-            Some(ids) => ids.iter().copied().collect(),
-            // No labels and no properties: every node is a candidate.
-            None => self.nodes.keys().copied().collect(),
-        };
-
         // Re-filter exactly: the index is keyed by `prop_value_key`, so confirm
         // every label and property with the precise comparison. The candidate
         // set is tiny (typically one node for a unique key), so this is cheap.
-        candidates
-            .into_iter()
-            .filter(|id| {
-                let node = match self.nodes.get(id) {
-                    Some(n) => n,
-                    None => return false,
-                };
-                let labels_match = labels.iter().all(|l| node.labels.contains(l));
-                if !labels_match {
-                    return false;
-                }
-                properties.iter().all(|(key, val)| {
-                    node.properties
-                        .get(key)
-                        .map(|v| property_values_equal(v, val))
-                        .unwrap_or(false)
-                })
+        let filter = |id: &NodeId| -> bool {
+            let node = match self.nodes.get(id) {
+                Some(n) => n,
+                None => return false,
+            };
+            if !labels.iter().all(|l| node.labels.contains(l)) {
+                return false;
+            }
+            properties.iter().all(|(key, val)| {
+                node.properties
+                    .get(key)
+                    .map(|v| property_values_equal(v, val))
+                    .unwrap_or(false)
             })
-            .collect()
+        };
+        match best {
+            Some(ids) => ids.iter().copied().filter(filter).collect(),
+            // No labels and no properties: every node is a candidate.
+            None => self.nodes.keys().copied().filter(filter).collect(),
+        }
     }
 
     fn all_node_ids(&self) -> Vec<NodeId> {
