@@ -456,10 +456,91 @@ fn add_property_filters(
 }
 
 fn plan_where(where_clause: &WhereClause, input: LogicalPlan) -> Result<LogicalPlan, CypherError> {
-    Ok(LogicalPlan::Filter {
-        input: Box::new(input),
-        predicate: where_clause.expression.clone(),
-    })
+    Ok(push_where_into_scan(&where_clause.expression, input))
+}
+
+/// Push simple `var.prop = scalar` equalities from a WHERE clause directly into
+/// an upstream `ScanNodes`, replacing the O(N) scan+filter with an O(1)
+/// property-index lookup.  Non-pushable predicates remain as a `Filter` node.
+fn push_where_into_scan(predicate: &Expression, input: LogicalPlan) -> LogicalPlan {
+    let LogicalPlan::ScanNodes { label_filter, mut inline_props, variable } = input else {
+        return LogicalPlan::Filter {
+            input: Box::new(input),
+            predicate: predicate.clone(),
+        };
+    };
+    let mut remaining: Option<Expression> = None;
+    extract_scan_equalities(predicate, &variable, &mut inline_props, &mut remaining);
+    let scan = LogicalPlan::ScanNodes { label_filter, inline_props, variable };
+    match remaining {
+        None => scan,
+        Some(rem) => LogicalPlan::Filter {
+            input: Box::new(scan),
+            predicate: rem,
+        },
+    }
+}
+
+/// Recursively extract `var.prop = scalar` equalities into `inline_props`;
+/// anything non-pushable accumulates in `remaining` as an `And` chain.
+fn extract_scan_equalities(
+    predicate: &Expression,
+    var: &str,
+    inline_props: &mut Vec<(String, Expression)>,
+    remaining: &mut Option<Expression>,
+) {
+    match predicate {
+        Expression::And(left, right) => {
+            extract_scan_equalities(left, var, inline_props, remaining);
+            extract_scan_equalities(right, var, inline_props, remaining);
+        }
+        Expression::Comparison {
+            left,
+            op: CompOp::Eq,
+            right,
+        } => {
+            // var.prop = scalar
+            if let Expression::Property(base, prop) = left.as_ref()
+                && let Expression::Variable(v) = base.as_ref()
+                && v == var
+                && is_scan_pushable(right)
+                && !inline_props.iter().any(|(k, _)| k == prop)
+            {
+                inline_props.push((prop.clone(), right.as_ref().clone()));
+                return;
+            }
+            // scalar = var.prop  (symmetric)
+            if let Expression::Property(base, prop) = right.as_ref()
+                && let Expression::Variable(v) = base.as_ref()
+                && v == var
+                && is_scan_pushable(left)
+                && !inline_props.iter().any(|(k, _)| k == prop)
+            {
+                inline_props.push((prop.clone(), left.as_ref().clone()));
+                return;
+            }
+            append_remaining(predicate.clone(), remaining);
+        }
+        _ => append_remaining(predicate.clone(), remaining),
+    }
+}
+
+/// Returns true if `expr` can be evaluated without any variable bindings
+/// (i.e. a scalar literal or query parameter).
+fn is_scan_pushable(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::Literal(
+            Literal::Integer(_) | Literal::Float(_) | Literal::String(_) | Literal::Boolean(_)
+        ) | Expression::Parameter(_)
+    )
+}
+
+fn append_remaining(expr: Expression, remaining: &mut Option<Expression>) {
+    *remaining = Some(match remaining.take() {
+        None => expr,
+        Some(prev) => Expression::And(Box::new(prev), Box::new(expr)),
+    });
 }
 
 fn plan_return(
