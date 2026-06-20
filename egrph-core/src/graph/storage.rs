@@ -321,31 +321,38 @@ impl StorageBackend for MemoryStorage {
         ids
     }
 
-    fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
+    fn set_node_property(&mut self, id: NodeId, key: &str, value: PropertyValue) {
         if let Some(node) = self.nodes.get_mut(&id).map(Arc::make_mut) {
             // Remove old index entry.
-            if let Some(old_val) = node.properties.get(&key) {
+            if let Some(old_val) = node.properties.get(key) {
                 let old_vkey = prop_key(old_val);
-                if let Some(val_map) = self.property_index.get_mut(&key)
+                if let Some(val_map) = self.property_index.get_mut(key)
                     && let Some(id_set) = val_map.get_mut(&old_vkey)
                 {
                     id_set.remove(&id);
                 }
             }
-            node.properties.insert(key.clone(), value.clone());
-            // Add new index entry.
-            self.property_index
-                .entry(key)
-                .or_default()
-                .entry(prop_key(&value))
-                .or_default()
-                .insert(id);
+            // Add new index entry — fast-path avoids String clone for existing keys.
+            let new_vkey = prop_key(&value);
+            let val_map = match self.property_index.get_mut(key) {
+                Some(m) => m,
+                None => self.property_index.entry(key.to_string()).or_default(),
+            };
+            val_map.entry(new_vkey).or_default().insert(id);
+            // In-place update avoids String clone + value clone for existing property keys.
+            match node.properties.get_mut(key) {
+                Some(slot) => *slot = value,
+                None => { node.properties.insert(key.to_string(), value); }
+            }
         }
     }
 
-    fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
+    fn set_edge_property(&mut self, id: EdgeId, key: &str, value: PropertyValue) {
         if let Some(edge) = self.edges.get_mut(&id).map(Arc::make_mut) {
-            edge.properties.insert(key, value);
+            match edge.properties.get_mut(key) {
+                Some(slot) => *slot = value,
+                None => { edge.properties.insert(key.to_string(), value); }
+            }
         }
     }
 

@@ -95,8 +95,8 @@ pub trait StorageBackend {
         properties: HashMap<String, PropertyValue>,
     ) -> Result<EdgeId, String>;
 
-    fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue);
-    fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue);
+    fn set_node_property(&mut self, id: NodeId, key: &str, value: PropertyValue);
+    fn set_edge_property(&mut self, id: EdgeId, key: &str, value: PropertyValue);
 
     fn set_node_all_properties(&mut self, id: NodeId, properties: HashMap<String, PropertyValue>);
     fn set_edge_all_properties(&mut self, id: EdgeId, properties: HashMap<String, PropertyValue>);

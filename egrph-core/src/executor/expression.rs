@@ -105,6 +105,16 @@ impl Record {
     pub fn reserve(&mut self, additional: usize) {
         Arc::make_mut(&mut self.inner).reserve(additional)
     }
+
+    /// Update an existing key in-place (no String allocation) or insert a new one.
+    /// Use this instead of `insert(k.to_string(), v)` when `k` is likely already present.
+    pub fn set(&mut self, k: &str, v: CypherValue) {
+        let map = Arc::make_mut(&mut self.inner);
+        match map.get_mut(k) {
+            Some(slot) => *slot = v,
+            None => { map.insert(k.to_string(), v); }
+        }
+    }
 }
 
 impl std::ops::Deref for Record {

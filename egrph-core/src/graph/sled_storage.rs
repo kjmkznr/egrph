@@ -456,24 +456,24 @@ impl StorageBackend for SledStorage {
         ids
     }
 
-    fn set_node_property(&mut self, id: NodeId, key: String, value: PropertyValue) {
+    fn set_node_property(&mut self, id: NodeId, key: &str, value: PropertyValue) {
         if let Some(node) = self.get_node(id) {
             let mut node = (*node).clone();
-            if let Some(old_val) = node.properties.get(&key) {
-                self.prop_idx.remove(prop_idx_key(&key, old_val, id)).ok();
+            if let Some(old_val) = node.properties.get(key) {
+                self.prop_idx.remove(prop_idx_key(key, old_val, id)).ok();
             }
             self.prop_idx
-                .insert(prop_idx_key(&key, &value, id), b"")
+                .insert(prop_idx_key(key, &value, id), b"")
                 .ok();
-            node.properties.insert(key, value);
+            node.properties.insert(key.to_string(), value);
             self.nodes.insert(u64_key(id), encode(&node)).ok();
         }
     }
 
-    fn set_edge_property(&mut self, id: EdgeId, key: String, value: PropertyValue) {
+    fn set_edge_property(&mut self, id: EdgeId, key: &str, value: PropertyValue) {
         if let Some(edge) = self.get_edge(id) {
             let mut edge = (*edge).clone();
-            edge.properties.insert(key, value);
+            edge.properties.insert(key.to_string(), value);
             self.edges.insert(u64_key(id), encode(&edge)).ok();
         }
     }

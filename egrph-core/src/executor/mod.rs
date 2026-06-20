@@ -809,7 +809,7 @@ fn sync_node_in_record<S: StorageBackend>(
     storage: &S,
 ) {
     if let Some(updated) = storage.get_node(node_id) {
-        rec.insert(variable.to_string(), CypherValue::Node(updated));
+        rec.set(variable, CypherValue::Node(updated));
     }
 }
 
@@ -821,7 +821,7 @@ fn sync_edge_in_record<S: StorageBackend>(
     storage: &S,
 ) {
     if let Some(updated) = storage.get_edge(edge_id) {
-        rec.insert(variable.to_string(), CypherValue::Relationship(updated));
+        rec.set(variable, CypherValue::Relationship(updated));
     }
 }
 
@@ -1326,12 +1326,12 @@ fn apply_set_item<S: StorageBackend>(
                 match rec.get(variable) {
                     Some(CypherValue::Node(n)) => {
                         let nid = n.id;
-                        storage.set_node_property(nid, property.clone(), prop_val);
+                        storage.set_node_property(nid, property, prop_val);
                         sync_node_in_record(rec, variable, nid, storage);
                     }
                     Some(CypherValue::Relationship(e)) => {
                         let eid = e.id;
-                        storage.set_edge_property(eid, property.clone(), prop_val);
+                        storage.set_edge_property(eid, property, prop_val);
                         sync_edge_in_record(rec, variable, eid, storage);
                     }
                     _ => {}
